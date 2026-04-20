@@ -1,16 +1,13 @@
 from django.http import JsonResponse
 from django.views.decorators.http import require_GET, require_http_methods
 
-from .models import (
-    AdminSetting,
-    Analytics,
-    Dashboard,
-    InventoryScan,
-    LoginActivity,
-    Result,
-    Upload,
-    UserSetting,
-)
+from accounts_app.models import LoginActivity
+from analytics_app.models import Analytics
+from app_settings.models import AdminSetting, UserSetting
+from dashboard_app.models import Dashboard
+from inventory_app.models import InventoryScan
+from results_app.models import Result
+from uploads_app.models import Upload
 from .services import ImageToPricePipeline
 
 
