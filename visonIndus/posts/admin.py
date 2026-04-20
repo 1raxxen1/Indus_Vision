@@ -1,3 +1,3 @@
 from django.contrib import admin
 
-# Register your models here.
+# Domain model admin registrations moved into their dedicated apps.
