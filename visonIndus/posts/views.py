@@ -11,6 +11,7 @@ from .models import (
     Upload,
     UserSetting,
 )
+from .services import ImageToPricePipeline
 
 
 @require_GET
@@ -48,6 +49,7 @@ def api_index(request):
                 "analytics": "/posts/api/analytics/",
                 "settings": "/posts/api/settings/",
                 "admin": "/posts/api/admin/",
+                "process_image": "/posts/api/process-image/",
             },
         }
     )
@@ -138,5 +140,35 @@ def admin_page(request):
         {
             "admin_settings": AdminSetting.objects.count(),
             "active_admin_settings": AdminSetting.objects.filter(is_active=True).count(),
+        }
+    )
+
+
+@require_http_methods(["POST"])
+def process_image_api(request):
+    """React API skeleton endpoint for Llama -> Selenium pipeline."""
+    image_name = request.POST.get("image_name")
+    upload_file = request.FILES.get("image")
+
+    if upload_file and not image_name:
+        image_name = upload_file.name
+
+    if not image_name:
+        return JsonResponse(
+            {
+                "error": "Provide image_name or image file in the request.",
+                "status": "invalid_request",
+            },
+            status=400,
+        )
+
+    pipeline = ImageToPricePipeline()
+    output = pipeline.run(image_name=image_name)
+
+    return JsonResponse(
+        {
+            "message": "Llama + Selenium skeleton pipeline response",
+            "input": {"image_name": image_name},
+            "output": output,
         }
     )

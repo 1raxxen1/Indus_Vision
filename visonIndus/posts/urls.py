@@ -24,4 +24,5 @@ urlpatterns = [
     path('api/analytics/', views.analytics_page, name='posts-api-analytics'),
     path('api/settings/', views.settings_page, name='posts-api-settings'),
     path('api/admin/', views.admin_page, name='posts-api-admin'),
+    path('api/process-image/', views.process_image_api, name='posts-api-process-image'),
 ]
