@@ -1,4 +1,6 @@
+from django.contrib.auth import get_user_model
 from django.http import JsonResponse
+from django.db import transaction
 from django.views.decorators.http import require_GET, require_http_methods
 
 from accounts_app.models import LoginActivity
@@ -9,6 +11,20 @@ from inventory_app.models import InventoryScan
 from results_app.models import Result
 from uploads_app.models import Upload
 from .services import ImageToPricePipeline
+
+
+def _resolve_upload_user(request):
+    if request.user.is_authenticated:
+        return request.user
+
+    user_model = get_user_model()
+    user, _ = user_model.objects.get_or_create(
+        username="system_uploader",
+        defaults={
+            "email": "system_uploader@local.invalid",
+        },
+    )
+    return user
 
 
 @require_GET
@@ -159,13 +175,57 @@ def process_image_api(request):
             status=400,
         )
 
-    pipeline = ImageToPricePipeline()
-    output = pipeline.run(image_name=image_name)
+    if not upload_file:
+        return JsonResponse(
+            {
+                "error": "Provide an image file in form-data under 'image'.",
+                "status": "invalid_request",
+            },
+            status=400,
+        )
+
+    upload_user = _resolve_upload_user(request)
+
+    with transaction.atomic():
+        upload_record = Upload.objects.create(
+            user=upload_user,
+            image=upload_file,
+            source_name=image_name,
+            status="processing",
+        )
+
+        pipeline = ImageToPricePipeline()
+        output = pipeline.run(image_name=upload_record.image.name)
+
+        extraction = output.get("extraction", {})
+        confidence = extraction.get("confidence") or 0
+
+        result_record = Result.objects.create(
+            upload=upload_record,
+            model_output=extraction,
+            technical_datasheet=extraction.get("technical_datasheet", {}),
+            price_details=output.get("pricing", {}),
+            confidence_score=confidence,
+        )
+
+        upload_record.status = "completed"
+        upload_record.save(update_fields=["status", "updated_at"])
 
     return JsonResponse(
         {
-            "message": "Llama + Selenium skeleton pipeline response",
-            "input": {"image_name": image_name},
+            "message": "Image persisted and processed with Llama + Selenium skeleton pipeline",
+            "input": {
+                "image_name": image_name,
+                "uploaded_file_name": upload_record.image.name,
+            },
+            "upload": {
+                "id": upload_record.id,
+                "status": upload_record.status,
+            },
+            "result": {
+                "id": result_record.id,
+                "upload_id": result_record.upload_id,
+            },
             "output": output,
         }
     )
