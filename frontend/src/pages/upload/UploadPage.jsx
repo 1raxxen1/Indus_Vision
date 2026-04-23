@@ -1,24 +1,19 @@
 // UploadPage.jsx
-// Core feature page — users upload images here for AI analysis.
-//
-// Flow:
-//   1. User drops / selects images
-//   2. Preview cards appear in the queue
-//   3. User clicks "Analyse with AI"
-//   4. Files are sent to Django backend (mocked for now)
-//   5. On success → navigate to /results with the scan ID
 
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { DropZone }         from '../../components/upload/DropZone'
+import { DropZone } from '../../components/upload/DropZone'
 import { ImagePreviewCard } from '../../components/upload/ImagePreviewCard'
 import {
-  Zap, Trash2, ImagePlus,
-  Lightbulb, CheckCircle, Loader2,
+  Zap, Trash2,
+  CheckCircle, Loader2,
 } from 'lucide-react'
-import { scanService } from '../../services/api'
 
-// Tips shown at the bottom of the page
+import { scanService } from '../../services/scanService'
+import toast from 'react-hot-toast'
+
+
+// ── Tips ───────────────────────────────
 const TIPS = [
   'Ensure the component is well-lit and in sharp focus.',
   'Include any visible labels, text, or part numbers in the frame.',
@@ -26,65 +21,68 @@ const TIPS = [
   'Avoid reflective surfaces — angle the camera to reduce glare.',
 ]
 
-// ── Processing steps shown during upload ────────────────────────
+// ── Steps ──────────────────────────────
 const STEPS = [
-  { label: 'Uploading image',        duration: 800  },
-  { label: 'Running AI detection',   duration: 1200 },
-  { label: 'Extracting OCR data',    duration: 900  },
-  { label: 'Fetching market pricing', duration: 700  },
+  { label: 'Uploading image' },
+  { label: 'Running AI detection' },
+  { label: 'Extracting OCR data' },
+  { label: 'Fetching market pricing' },
 ]
+
 
 export function UploadPage() {
   const navigate = useNavigate()
 
-  // Each item: { file: File, previewUrl: string }
-  const [queue,       setQueue]       = useState([])
+  const [queue, setQueue] = useState([])
   const [isAnalysing, setIsAnalysing] = useState(false)
   const [currentStep, setCurrentStep] = useState(0)
-  const [isDone,      setIsDone]      = useState(false)
+  const [isDone, setIsDone] = useState(false)
 
-  // ── Add files to the queue ───────────────────────────────────
-  // useCallback so DropZone doesn't get a new reference on every render
+
+  // ── Add files ───────────────────────
   const handleFilesSelected = useCallback((newFiles) => {
     const entries = newFiles.map(file => ({
       file,
-      // createObjectURL gives a local URL we can use as an <img> src
-      // We must revoke these when the component unmounts to avoid memory leaks
       previewUrl: URL.createObjectURL(file),
     }))
     setQueue(prev => [...prev, ...entries])
   }, [])
 
-  // ── Remove one file from the queue ──────────────────────────
+
+  // ── Remove file ─────────────────────
   function removeFile(index) {
     setQueue(prev => {
-      // Revoke the URL before removing to free memory
       URL.revokeObjectURL(prev[index].previewUrl)
       return prev.filter((_, i) => i !== index)
     })
   }
 
-  // ── Clear entire queue ───────────────────────────────────────
+
+  // ── Clear queue ─────────────────────
   function clearQueue() {
     queue.forEach(item => URL.revokeObjectURL(item.previewUrl))
     setQueue([])
   }
 
-  // ── Cleanup all preview URLs when component unmounts ────────
+
+  // ── Cleanup ─────────────────────────
   useEffect(() => {
     return () => {
       queue.forEach(item => URL.revokeObjectURL(item.previewUrl))
     }
-  }, [])  // Empty deps — only runs on unmount
+  }, [])
 
-  // ── Total size of all queued files ──────────────────────────
+
+  // ── Total size ──────────────────────
   const totalSize = queue.reduce((sum, item) => sum + item.file.size, 0)
+
   function formatTotal(bytes) {
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
   }
 
-  // ── Submit for AI analysis ───────────────────────────────────
+
+  // ── 🔥 FINAL ANALYSE FUNCTION ───────────────────────────────
   async function handleAnalyse() {
     if (queue.length === 0) return
 
@@ -93,130 +91,143 @@ export function UploadPage() {
     setIsDone(false)
 
     try {
-      for (let i = 0; i < STEPS.length; i++) {
-        setCurrentStep(i)
-        if (i < STEPS.length - 1) {
-          await new Promise(r => setTimeout(r, STEPS[i].duration))
-        }
-      }
+      const results = []
 
-      const files = queue.map(item => item.file)
-      const response = await scanService.processImages(files)
-      const resultId = response.data?.results?.[0]?.result?.id ?? response.data?.result?.id
-      if (!resultId) {
-        throw new Error('Result id missing from backend response')
+      for (let i = 0; i < queue.length; i++) {
+        const item = queue[i]
+
+        // Step 0 — Upload
+        setCurrentStep(0)
+
+        const res = await scanService.processImage(
+          item.file,
+          item.file.name
+        )
+
+        // Step progression (UX)
+        setCurrentStep(1)
+        await new Promise(r => setTimeout(r, 300))
+
+        setCurrentStep(2)
+        await new Promise(r => setTimeout(r, 300))
+
+        setCurrentStep(3)
+        await new Promise(r => setTimeout(r, 300))
+
+        results.push(res)
       }
 
       setIsDone(true)
+      toast.success('Analysis complete!')
 
-      // Short pause so user sees the "Done!" state
       await new Promise(r => setTimeout(r, 600))
 
-      navigate('/results', { state: { scanId: resultId } })
+      const first = results[0] || {}
+
+      navigate('/results', {
+        state: {
+          resultId:
+            first.result?.id ??
+            first.result_id ??
+            first.scan_id ??
+            first.id,
+
+          scanId:
+            first.scan_id ??
+            first.result?.id ??
+            first.id,
+
+          result: first,
+        }
+      })
 
     } catch (err) {
-      console.error('Upload failed:', err)
-      const backendMessage = err?.response?.data?.error || err?.response?.data?.message
-      alert(backendMessage || 'Upload failed. Please try again.')
+      console.error('Upload error:', err)
+
+      toast.error(
+        err?.response?.data?.message ||
+        err.message ||
+        'Upload failed. Check backend connection.'
+      )
+
       setIsAnalysing(false)
+      setIsDone(false)
     }
   }
 
-  // ── Render ───────────────────────────────────────────────────
+
+  // ── UI ──────────────────────────────
   return (
     <div className="animate-fade-in max-w-4xl mx-auto space-y-6">
 
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-navy-800">Upload component image</h1>
+        <h1 className="text-2xl font-bold text-navy-800">
+          Upload component image
+        </h1>
         <p className="text-sm text-gray-500 mt-1">
-          Upload one or more images of industrial components for AI identification and pricing.
+          Upload images for AI identification and pricing.
         </p>
       </div>
 
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
-        {/* ── Left col: Drop zone + Preview queue ─────────────── */}
+        {/* LEFT */}
         <div className="lg:col-span-2 space-y-4">
 
-          {/* Drop zone — hidden during analysis */}
           {!isAnalysing && (
             <DropZone onFilesSelected={handleFilesSelected} />
           )}
 
-          {/* Processing view — replaces drop zone during analysis */}
+          {/* Processing UI */}
           {isAnalysing && (
-            <div className="bg-white border border-surface-border rounded-2xl p-8
-                            flex flex-col items-center justify-center min-h-[200px] gap-5">
+            <div className="bg-white border rounded-2xl p-8 flex flex-col items-center gap-5">
 
-              {/* Animated icon */}
               <div className={`w-16 h-16 rounded-2xl flex items-center justify-center
-                              ${isDone ? 'bg-green-50' : 'bg-orange-50'}`}>
+                ${isDone ? 'bg-green-50' : 'bg-orange-50'}`}>
+
                 {isDone
                   ? <CheckCircle size={32} className="text-green-500" />
-                  : <Loader2    size={32} className="text-orange-500 animate-spin" />
+                  : <Loader2 size={32} className="text-orange-500 animate-spin" />
                 }
               </div>
 
-              {/* Step list */}
-              <div className="w-full max-w-xs space-y-3">
+              <div className="space-y-3">
                 {STEPS.map((step, i) => {
-                  const done    = i < currentStep || isDone
-                  const active  = i === currentStep && !isDone
-                  return (
-                    <div key={step.label} className="flex items-center gap-3">
-                      {/* Step indicator */}
-                      <div className={`
-                        w-5 h-5 rounded-full flex items-center justify-center
-                        flex-shrink-0 transition-all duration-300
-                        ${done    ? 'bg-green-500'  : ''}
-                        ${active  ? 'bg-orange-500 animate-pulse' : ''}
-                        ${!done && !active ? 'bg-gray-200' : ''}
-                      `}>
-                        {done && <CheckCircle size={12} className="text-white" />}
-                      </div>
+                  const done = i < currentStep || isDone
+                  const active = i === currentStep && !isDone
 
-                      {/* Step label */}
-                      <span className={`text-sm transition-colors duration-300
-                        ${done   ? 'text-green-600 font-medium' : ''}
-                        ${active ? 'text-orange-600 font-medium' : ''}
-                        ${!done && !active ? 'text-gray-400' : ''}
-                      `}>
-                        {step.label}
-                      </span>
+                  return (
+                    <div key={step.label} className="flex gap-3">
+                      <div className={`w-5 h-5 rounded-full
+                        ${done ? 'bg-green-500' : active ? 'bg-orange-500' : 'bg-gray-200'}`} />
+                      <span>{step.label}</span>
                     </div>
                   )
                 })}
               </div>
 
               <p className="text-xs text-gray-400">
-                {isDone ? 'Complete! Redirecting...' : 'Please wait while AI processes your image'}
+                {isDone ? 'Complete! Redirecting...' : 'Processing...'}
               </p>
             </div>
           )}
 
-          {/* Image preview queue */}
+          {/* Queue */}
           {queue.length > 0 && !isAnalysing && (
             <div>
-              {/* Queue header */}
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-sm font-semibold text-navy-800">
-                  Queued images
-                  <span className="ml-2 text-xs font-normal text-gray-400">
-                    ({queue.length} {queue.length === 1 ? 'file' : 'files'} · {formatTotal(totalSize)})
-                  </span>
+              <div className="flex justify-between mb-3">
+                <p>
+                  {queue.length} files · {formatTotal(totalSize)}
                 </p>
-                <button
-                  onClick={clearQueue}
-                  className="flex items-center gap-1.5 text-xs text-red-500
-                             hover:text-red-600 font-medium transition-colors"
-                >
-                  <Trash2 size={12} /> Clear all
+
+                <button onClick={clearQueue}>
+                  <Trash2 size={14} /> Clear
                 </button>
               </div>
 
-              {/* Preview grid */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 gap-3">
                 {queue.map((item, i) => (
                   <ImagePreviewCard
                     key={item.previewUrl}
@@ -225,109 +236,32 @@ export function UploadPage() {
                     onRemove={() => removeFile(i)}
                   />
                 ))}
-
-                {/* "Add more" tile */}
-                <button
-                  onClick={() => document.querySelector('input[type="file"]')?.click()}
-                  className="h-full min-h-[120px] border-2 border-dashed border-gray-200
-                             rounded-xl flex flex-col items-center justify-center gap-2
-                             text-gray-400 hover:border-orange-300 hover:text-orange-500
-                             hover:bg-orange-50/40 transition-all duration-200"
-                >
-                  <ImagePlus size={20} />
-                  <span className="text-xs font-medium">Add more</span>
-                </button>
               </div>
             </div>
           )}
         </div>
 
-        {/* ── Right col: Summary + Tips ───────────────────────── */}
+
+        {/* RIGHT */}
         <div className="space-y-4">
 
-          {/* Submission summary card */}
-          <div className="bg-white border border-surface-border rounded-xl p-5 space-y-4">
-            <h2 className="text-sm font-semibold text-navy-800">Submission summary</h2>
+          <button
+            onClick={handleAnalyse}
+            disabled={queue.length === 0 || isAnalysing}
+            className="w-full bg-orange-600 text-white py-3 rounded-xl"
+          >
+            <Zap size={14} />
+            {isAnalysing ? 'Analysing...' : 'Analyse with AI'}
+          </button>
 
-            {/* Stats row */}
-            <div className="grid grid-cols-2 gap-2">
-              {[
-                { label: 'Images',     value: queue.length || '—'                          },
-                { label: 'Total size', value: queue.length ? formatTotal(totalSize) : '—'  },
-                { label: 'Status',     value: queue.length ? 'Ready' : 'Empty',
-                  valueClass: queue.length ? 'text-green-600' : 'text-gray-400'             },
-                { label: 'Model',      value: 'LLAMA 3.2'                                  },
-              ].map(item => (
-                <div key={item.label} className="bg-gray-50 rounded-lg p-3">
-                  <p className="text-[10px] text-gray-400 uppercase tracking-wide">{item.label}</p>
-                  <p className={`text-sm font-semibold mt-0.5 ${item.valueClass ?? 'text-navy-800'}`}>
-                    {item.value}
-                  </p>
-                </div>
-              ))}
-            </div>
-
-            {/* Divider */}
-            <hr className="border-surface-border" />
-
-            {/* Submit button */}
-            <button
-              onClick={handleAnalyse}
-              disabled={queue.length === 0 || isAnalysing}
-              className={`
-                w-full flex items-center justify-center gap-2
-                py-3 rounded-xl text-sm font-medium
-                transition-all duration-200
-                ${queue.length === 0 || isAnalysing
-                  ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                  : 'bg-orange-600 hover:bg-orange-700 text-white active:scale-95 shadow-sm'
-                }
-              `}
-            >
-              <Zap size={15} />
-              {isAnalysing ? 'Analysing...' : 'Analyse with AI'}
-            </button>
-
-            {queue.length === 0 && (
-              <p className="text-[11px] text-center text-gray-400">
-                Add at least one image to continue.
-              </p>
-            )}
-          </div>
-
-          {/* Tips card */}
-          <div className="bg-white border border-surface-border rounded-xl p-5">
-            <div className="flex items-center gap-2 mb-3">
-              <Lightbulb size={14} className="text-orange-500" />
-              <h2 className="text-sm font-semibold text-navy-800">Tips for best results</h2>
-            </div>
-            <ul className="space-y-2.5">
-              {TIPS.map((tip, i) => (
-                <li key={i} className="flex items-start gap-2.5">
-                  <span className="w-1.5 h-1.5 bg-orange-400 rounded-full mt-1.5 flex-shrink-0" />
-                  <span className="text-xs text-gray-500 leading-relaxed">{tip}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          {/* Supported formats info */}
-          <div className="bg-navy-800 rounded-xl p-4">
-            <p className="text-xs font-semibold text-white mb-2">AI pipeline</p>
-            <div className="space-y-1.5">
-              {[
-                'LLAMA 3.2 Vision — object detection',
-                'PaddleOCR — text extraction',
-                'Scraper — Indian market pricing',
-              ].map(item => (
-                <div key={item} className="flex items-center gap-2">
-                  <CheckCircle size={11} className="text-orange-400 flex-shrink-0" />
-                  <span className="text-[11px] text-navy-300">{item}</span>
-                </div>
-              ))}
-            </div>
+          <div>
+            <h2 className="text-sm font-semibold">Tips</h2>
+            {TIPS.map((tip, i) => (
+              <p key={i} className="text-xs">{tip}</p>
+            ))}
           </div>
         </div>
+
       </div>
     </div>
   )
