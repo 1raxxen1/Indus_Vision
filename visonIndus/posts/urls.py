@@ -20,6 +20,7 @@ urlpatterns = [
     path('api/dashboard/', views.dashboard_page, name='posts-api-dashboard'),
     path('api/upload/', views.upload_page, name='posts-api-upload'),
     path('api/results/', views.results_page, name='posts-api-results'),
+    path('api/results/<int:result_id>/', views.result_detail_api, name='posts-api-result-detail'),
     path('api/scan-inventory/', views.scan_inventory_page, name='posts-api-scan-inventory'),
     path('api/analytics/', views.analytics_page, name='posts-api-analytics'),
     path('api/settings/', views.settings_page, name='posts-api-settings'),

@@ -16,6 +16,7 @@ import {
   Zap, Trash2, ImagePlus,
   Lightbulb, CheckCircle, Loader2,
 } from 'lucide-react'
+import { scanService } from '../../services/api'
 
 // Tips shown at the bottom of the page
 const TIPS = [
@@ -92,18 +93,18 @@ export function UploadPage() {
     setIsDone(false)
 
     try {
-      // ── Step-by-step progress simulation ──
-      // Each step has a duration — we advance through them in order.
-      // Replace this with your real API call:
-      //
-      //   const formData = new FormData()
-      //   queue.forEach(item => formData.append('images', item.file))
-      //   const res = await scanService.uploadImages(formData)
-      //   navigate(`/results/${res.data.scan_id}`)
-
       for (let i = 0; i < STEPS.length; i++) {
         setCurrentStep(i)
-        await new Promise(r => setTimeout(r, STEPS[i].duration))
+        if (i < STEPS.length - 1) {
+          await new Promise(r => setTimeout(r, STEPS[i].duration))
+        }
+      }
+
+      const files = queue.map(item => item.file)
+      const response = await scanService.processImages(files)
+      const resultId = response.data?.results?.[0]?.result?.id ?? response.data?.result?.id
+      if (!resultId) {
+        throw new Error('Result id missing from backend response')
       }
 
       setIsDone(true)
@@ -111,12 +112,12 @@ export function UploadPage() {
       // Short pause so user sees the "Done!" state
       await new Promise(r => setTimeout(r, 600))
 
-      // Navigate to results — pass a mock scan ID for now
-      navigate('/results', { state: { scanId: 'scan_mock_001' } })
+      navigate('/results', { state: { scanId: resultId } })
 
     } catch (err) {
       console.error('Upload failed:', err)
-      alert('Upload failed. Please try again.')
+      const backendMessage = err?.response?.data?.error || err?.response?.data?.message
+      alert(backendMessage || 'Upload failed. Please try again.')
       setIsAnalysing(false)
     }
   }
