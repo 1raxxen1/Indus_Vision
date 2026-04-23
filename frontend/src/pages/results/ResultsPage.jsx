@@ -6,6 +6,7 @@
 //   - Indian market pricing (PricingCard)
 //   - Action buttons: save to inventory, download, new scan
 
+import { useEffect, useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { DetectionCard }  from '../../components/results/DetectionCard'
 import { OCRCard }        from '../../components/results/OCRCard'
@@ -16,6 +17,7 @@ import {
   Upload, Share2, ImageIcon,
   CheckCircle,
 } from 'lucide-react'
+import { scanService } from '../../services/api'
 
 // ── Mock result data ─────────────────────────────────────────────
 // This is structured exactly how your Django API should return data.
@@ -180,12 +182,39 @@ export function ResultsPage() {
 
   // scanId passed from UploadPage via navigate('/results', { state: { scanId } })
   // When real backend is connected: fetch result using this ID
-  const scanId = location.state?.scanId ?? 'scan_mock_001'
+  const scanId = location.state?.scanId
+  const [result, setResult] = useState(scanId ? null : MOCK_RESULT)
+  const [loading, setLoading] = useState(Boolean(scanId))
+  const [error, setError] = useState('')
 
-  // Use mock data — replace with:
-  // const [result, setResult] = useState(null)
-  // useEffect(() => { scanService.getResult(scanId).then(r => setResult(r.data)) }, [scanId])
-  const result = MOCK_RESULT
+  useEffect(() => {
+    if (!scanId) return
+
+    let isMounted = true
+    setLoading(true)
+    setError('')
+    scanService.getResult(scanId)
+      .then((response) => {
+        if (isMounted) {
+          setResult(response.data)
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setError('Could not load scan details. Showing mock data instead.')
+          setResult(MOCK_RESULT)
+        }
+      })
+      .finally(() => {
+        if (isMounted) {
+          setLoading(false)
+        }
+      })
+
+    return () => {
+      isMounted = false
+    }
+  }, [scanId])
 
   function handleSave() {
     // TODO: inventoryService.saveItem(result.detection)
@@ -217,14 +246,27 @@ export function ResultsPage() {
         <div className="flex-1">
           <h1 className="text-2xl font-bold text-navy-800">Scan results</h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            Scan ID: <span className="font-mono text-navy-600">{scanId}</span>
-            &nbsp;· {result.scanTime}
+            Scan ID: <span className="font-mono text-navy-600">{scanId ?? result?.scanId}</span>
+            &nbsp;· {result?.scanTime}
           </p>
         </div>
         <Badge variant="green">Analysis complete</Badge>
       </div>
 
+      {loading && (
+        <div className="bg-white border border-surface-border rounded-xl p-4 text-sm text-gray-500">
+          Loading result details...
+        </div>
+      )}
+
+      {error && (
+        <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 text-sm text-orange-700">
+          {error}
+        </div>
+      )}
+
       {/* ── Main layout: 3 cols left + 2 cols right ─────────────── */}
+      {result && (
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
 
         {/* LEFT — image + actions (2/5 width) */}
@@ -248,6 +290,7 @@ export function ResultsPage() {
           <PricingCard   pricing={result.pricing}  />
         </div>
       </div>
+      )}
     </div>
   )
 }

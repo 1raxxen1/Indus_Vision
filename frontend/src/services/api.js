@@ -37,3 +37,26 @@ api.interceptors.response.use(
 );
 
 export default api;
+
+export const scanService = {
+  processImage: (file, imageName) => {
+    const formData = new FormData();
+    formData.append('image', file);
+    if (imageName) {
+      formData.append('image_name', imageName);
+    }
+    return api.post('/posts/api/process-image/', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120000,
+    });
+  },
+  processImages: (files) => {
+    const formData = new FormData();
+    files.forEach((file) => formData.append('images', file));
+    return api.post('/posts/api/process-image/', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 180000,
+    });
+  },
+  getResult: (resultId) => api.get(`/posts/api/results/${resultId}/`),
+};

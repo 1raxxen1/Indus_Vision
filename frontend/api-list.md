@@ -8,6 +8,7 @@ Base URL prefix for core app routes: `/posts/api/`
 - `GET /posts/api/dashboard/` — Dashboard summary counts.
 - `GET|POST /posts/api/upload/` — Upload queue/status summary.
 - `GET /posts/api/results/` — Result summary + latest result id.
+- `GET /posts/api/results/<result_id>/` — Full persisted result payload formatted for the Results UI.
 - `GET /posts/api/scan-inventory/` — Inventory scan totals.
 - `GET /posts/api/analytics/` — Analytics snapshot summary.
 - `GET /posts/api/settings/` — User/admin settings summary.

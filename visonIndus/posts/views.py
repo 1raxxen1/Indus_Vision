@@ -1,4 +1,8 @@
+import base64
+import json
+
 from django.contrib.auth import get_user_model
+from django.core.files.base import ContentFile
 from django.http import JsonResponse
 from django.db import transaction
 from django.views.decorators.http import require_GET, require_http_methods
@@ -25,6 +29,74 @@ def _resolve_upload_user(request):
         },
     )
     return user
+
+
+def _serialize_result(result: Result) -> dict:
+    model_output = result.model_output or {}
+    technical_datasheet = result.technical_datasheet or {}
+    pricing_payload = result.price_details or {}
+    extracted_product = model_output.get("product", {})
+    pricing_rows = pricing_payload.get("prices", [])
+
+    image_url = result.upload.image.url if result.upload and result.upload.image else None
+    detection_name = extracted_product.get("name") or result.upload.source_name or "Detected component"
+    confidence = int(float(result.confidence_score or 0))
+    raw_text = technical_datasheet.get("raw_text", "")
+    ocr_tokens = [token.strip() for token in raw_text.split() if token.strip()]
+
+    normalized_suppliers = [
+        {
+            "name": row.get("source", "Unknown source"),
+            "price": row.get("price"),
+            "unit": row.get("availability", "N/A"),
+            "url": row.get("url", ""),
+        }
+        for row in pricing_rows
+    ]
+    numeric_prices = [
+        float(row.get("price"))
+        for row in pricing_rows
+        if row.get("price") is not None and str(row.get("price")).replace(".", "", 1).isdigit()
+    ]
+    per_unit = numeric_prices[0] if numeric_prices else None
+
+    return {
+        "scanId": result.id,
+        "scanTime": result.created_at.isoformat(),
+        "imageUrl": image_url,
+        "detection": {
+            "name": detection_name,
+            "category": "Industrial Component",
+            "confidence": confidence,
+            "description": f"Skeleton extraction for {detection_name}",
+            "specifications": [
+                {"key": "Model number", "value": extracted_product.get("model_number", "TODO")},
+                {"key": "Manufacturer", "value": extracted_product.get("manufacturer", "TODO")},
+                {"key": "Voltage", "value": technical_datasheet.get("voltage", "TODO")},
+                {"key": "Power", "value": technical_datasheet.get("power", "TODO")},
+                {"key": "Dimensions", "value": technical_datasheet.get("dimensions", "TODO")},
+            ],
+        },
+        "ocr": {
+            "texts": ocr_tokens or ["TODO: OCR/vision text pending model integration"],
+        },
+        "pricing": {
+            "priceMin": min(numeric_prices) if numeric_prices else None,
+            "priceMax": max(numeric_prices) if numeric_prices else None,
+            "perUnit": per_unit,
+            "trend": "stable",
+            "suppliers": normalized_suppliers,
+        },
+        "storage": {
+            "uploadId": result.upload_id,
+            "uploadStatus": result.upload.status,
+        },
+        "raw": {
+            "model_output": model_output,
+            "technical_datasheet": technical_datasheet,
+            "price_details": pricing_payload,
+        },
+    }
 
 
 @require_GET
@@ -113,6 +185,22 @@ def results_page(request):
 
 
 @require_GET
+def result_detail_api(request, result_id: int):
+    try:
+        result = Result.objects.select_related("upload").get(id=result_id)
+    except Result.DoesNotExist:
+        return JsonResponse(
+            {
+                "error": "Result not found",
+                "status": "not_found",
+            },
+            status=404,
+        )
+
+    return JsonResponse(_serialize_result(result))
+
+
+@require_GET
 def scan_inventory_page(request):
     return JsonResponse(
         {
@@ -159,73 +247,135 @@ def admin_page(request):
 
 @require_http_methods(["POST"])
 def process_image_api(request):
-    """React API skeleton endpoint for Llama -> Selenium pipeline."""
-    image_name = request.POST.get("image_name")
-    upload_file = request.FILES.get("image")
+    """React API endpoint for Llama -> Selenium pipeline (single or multi-image)."""
+    upload_files = request.FILES.getlist("images")
+    single_upload = request.FILES.get("image")
 
-    if upload_file and not image_name:
-        image_name = upload_file.name
+    if single_upload:
+        upload_files.append(single_upload)
 
-    if not image_name:
+    if request.content_type and "application/json" in request.content_type and not upload_files:
+        try:
+            payload = json.loads(request.body or "{}")
+        except json.JSONDecodeError:
+            return JsonResponse(
+                {"error": "Invalid JSON payload.", "status": "invalid_request"},
+                status=400,
+            )
+
+        base64_images = payload.get("images_base64") or []
+        single_base64_image = payload.get("image_base64")
+        if single_base64_image:
+            base64_images.append(single_base64_image)
+
+        for index, encoded_image in enumerate(base64_images):
+            try:
+                if "," in encoded_image:
+                    _, encoded_image = encoded_image.split(",", 1)
+                decoded = base64.b64decode(encoded_image)
+            except (ValueError, TypeError):
+                return JsonResponse(
+                    {
+                        "error": f"Invalid base64 image payload at index {index}.",
+                        "status": "invalid_request",
+                    },
+                    status=400,
+                )
+
+            file_name = f"base64_upload_{index + 1}.png"
+            upload_files.append(ContentFile(decoded, name=file_name))
+
+    if not upload_files:
         return JsonResponse(
             {
-                "error": "Provide image_name or image file in the request.",
-                "status": "invalid_request",
-            },
-            status=400,
-        )
-
-    if not upload_file:
-        return JsonResponse(
-            {
-                "error": "Provide an image file in form-data under 'image'.",
+                "error": (
+                    "Provide at least one image file in 'images' or 'image', "
+                    "or pass base64 images in 'images_base64' / 'image_base64'."
+                ),
                 "status": "invalid_request",
             },
             status=400,
         )
 
     upload_user = _resolve_upload_user(request)
+    pipeline = ImageToPricePipeline()
+    processed_results: list[dict] = []
+    failed_uploads: list[dict] = []
 
-    with transaction.atomic():
-        upload_record = Upload.objects.create(
-            user=upload_user,
-            image=upload_file,
-            source_name=image_name,
-            status="processing",
-        )
+    for upload_file in upload_files:
+        image_name = request.POST.get("image_name") or upload_file.name
+        with transaction.atomic():
+            upload_record = Upload.objects.create(
+                user=upload_user,
+                image=upload_file,
+                source_name=image_name,
+                status="processing",
+            )
 
-        pipeline = ImageToPricePipeline()
-        output = pipeline.run(image_name=upload_record.image.name)
+            try:
+                output = pipeline.run(image_name=upload_record.image.name)
+                extraction = output.get("extraction", {})
+                confidence = extraction.get("confidence") or 0
 
-        extraction = output.get("extraction", {})
-        confidence = extraction.get("confidence") or 0
+                result_record = Result.objects.create(
+                    upload=upload_record,
+                    model_output=extraction,
+                    technical_datasheet=extraction.get("technical_datasheet", {}),
+                    price_details=output.get("pricing", {}),
+                    confidence_score=confidence,
+                )
+                upload_record.status = "completed"
+                upload_record.save(update_fields=["status", "updated_at"])
 
-        result_record = Result.objects.create(
-            upload=upload_record,
-            model_output=extraction,
-            technical_datasheet=extraction.get("technical_datasheet", {}),
-            price_details=output.get("pricing", {}),
-            confidence_score=confidence,
-        )
+                processed_results.append(
+                    {
+                        "input": {
+                            "image_name": image_name,
+                            "uploaded_file_name": upload_record.image.name,
+                        },
+                        "upload": {
+                            "id": upload_record.id,
+                            "status": upload_record.status,
+                        },
+                        "result": {
+                            "id": result_record.id,
+                            "upload_id": result_record.upload_id,
+                            "details_endpoint": f"/posts/api/results/{result_record.id}/",
+                        },
+                        "output": output,
+                        "display": _serialize_result(result_record),
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001 - keep pipeline errors isolated per image
+                upload_record.status = "failed"
+                upload_record.save(update_fields=["status", "updated_at"])
+                failed_uploads.append(
+                    {
+                        "image_name": image_name,
+                        "uploaded_file_name": upload_record.image.name,
+                        "upload_id": upload_record.id,
+                        "error": str(exc),
+                    }
+                )
 
-        upload_record.status = "completed"
-        upload_record.save(update_fields=["status", "updated_at"])
-
-    return JsonResponse(
-        {
-            "message": "Image persisted and processed with Llama + Selenium skeleton pipeline",
-            "input": {
-                "image_name": image_name,
-                "uploaded_file_name": upload_record.image.name,
-            },
-            "upload": {
-                "id": upload_record.id,
-                "status": upload_record.status,
-            },
-            "result": {
-                "id": result_record.id,
-                "upload_id": result_record.upload_id,
-            },
-            "output": output,
-        }
+    status = (
+        "completed"
+        if processed_results and not failed_uploads
+        else "partial_success"
+        if processed_results and failed_uploads
+        else "failed"
     )
+    response_status = 200 if processed_results else 500
+
+    response_payload = {
+        "message": "Images processed through Llama + Selenium pipeline",
+        "status": status,
+        "processed_count": len(processed_results),
+        "failed_count": len(failed_uploads),
+        "results": processed_results,
+        "failures": failed_uploads,
+    }
+    if len(processed_results) == 1:
+        response_payload.update(processed_results[0])
+
+    return JsonResponse(response_payload, status=response_status)
