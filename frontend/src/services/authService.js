@@ -1,7 +1,15 @@
 import api from './api'
 import axios from 'axios'
 
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const explicitHost = import.meta.env.VITE_API_URL?.replace(/\/+$/, '')
+const apiBase = import.meta.env.VITE_API_BASE_URL || ''
+const derivedHost = apiBase.startsWith('http')
+  ? apiBase.replace(/\/posts\/api\/?$/, '')
+  : ''
+const isLocalDev = import.meta.env.DEV
+  && typeof window !== 'undefined'
+  && ['localhost', '127.0.0.1'].includes(window.location.hostname)
+const BASE_URL = explicitHost || derivedHost || (isLocalDev ? 'http://localhost:8000' : '')
 
 export const authService = {
   getLoginSummary: () => api.get('/login/'),
