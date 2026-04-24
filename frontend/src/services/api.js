@@ -2,7 +2,21 @@
 import axios from 'axios'
 
 const envBase = import.meta.env.VITE_API_BASE_URL
-const defaultBase = '/posts/api'
+const legacyApiHost = import.meta.env.VITE_API_URL
+
+const normalizedHost = legacyApiHost
+  ? legacyApiHost.replace(/\/+$/, '')
+  : ''
+
+const isLocalDev = import.meta.env.DEV
+  && typeof window !== 'undefined'
+  && ['localhost', '127.0.0.1'].includes(window.location.hostname)
+
+const defaultBase = normalizedHost
+  ? `${normalizedHost}/posts/api`
+  : isLocalDev
+    ? 'http://localhost:8000/posts/api'
+    : '/posts/api'
 
 const api = axios.create({
   baseURL: envBase || defaultBase,

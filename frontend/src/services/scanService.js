@@ -36,4 +36,8 @@ export const scanService = {
   // ── GET /posts/api/results/ ───────────────────────────────────
   // Returns latest result ID and summary list
   getResults: () => api.get('/results/'),
+
+  // ── GET /posts/api/results/<id>/ ──────────────────────────────
+  // Returns one normalized result payload
+  getResultById: (id) => api.get(`/results/${id}/`),
 }

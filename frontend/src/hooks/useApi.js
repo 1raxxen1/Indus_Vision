@@ -14,7 +14,11 @@ export function useApi(apiFn, deps = []) {
     setError(null)
     try {
       const res = await apiFn()
-      setData(res.data)
+      const payload =
+        res && typeof res === 'object' && 'data' in res
+          ? res.data
+          : (res ?? null)
+      setData(payload)
     } catch (err) {
       setError(err.message || 'Failed to load data')
     } finally {
