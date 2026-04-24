@@ -32,7 +32,7 @@ export function SettingsPage() {
 
   // ── Fetch settings ──────────────────
   const { data, loading, error, refetch } = useApi(
-    () => settingsService.getUserSettings()
+    () => settingsService.getUserSettings(user?.name || '')
   )
 
   // ── Form state ──────────────────────
@@ -82,7 +82,7 @@ export function SettingsPage() {
     if (!currPwd || !newPwd) return
 
     updatePassword(
-      { current_password: currPwd, new_password: newPwd },
+      { email, current_password: currPwd, new_password: newPwd },
       {
         onSuccess: () => {
           setSaved('password')

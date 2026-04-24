@@ -11,13 +11,7 @@ import { ScanHistoryPage }          from './pages/history/ScanHistoryPage'
 import { AnalyticsPage }            from './pages/analytics/AnalyticsPage'
 import { ReportsPage }              from './pages/reports/ReportsPage'
 import { SettingsPage }             from './pages/settings/SettingsPage'
-
-const Placeholder = ({ title }) => (
-  <div className="p-2">
-    <h1 className="text-2xl font-semibold text-navy-800">{title}</h1>
-    <p className="text-sm text-gray-400 mt-1">Coming soon.</p>
-  </div>
-)
+import { AdminPage }                from './pages/admin/AdminPage'
 
 function PublicRoute({ children }) {
   const { user } = useAuth()
@@ -48,7 +42,7 @@ export default function App() {
         <Route path="/analytics"     element={<AnalyticsPage />}     />
         <Route path="/reports"       element={<ReportsPage />}       />
         <Route path="/settings"      element={<SettingsPage />}      />
-        <Route path="/admin"         element={<Placeholder title="Admin Panel" />} />
+        <Route path="/admin"         element={<AdminPage />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/login" replace />} />

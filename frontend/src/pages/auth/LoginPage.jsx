@@ -88,6 +88,23 @@ export function LoginPage() {
     setLoading(true)
 
     try {
+      if (mode === 'register') {
+        const registerRes = await authService.register({
+          name: form.name,
+          email: form.email,
+          password: form.password,
+        })
+
+        if (!registerRes.success) {
+          throw new Error(registerRes.error || 'Registration failed')
+        }
+
+        toast.success('Registration successful. Please log in.')
+        setMode('login')
+        setForm(prev => ({ ...prev, confirmPassword: '' }))
+        return
+      }
+
       const response = await authService.login(
         form.email,
         form.password
@@ -109,25 +126,11 @@ export function LoginPage() {
         throw new Error(response.error || 'Login failed')
       }
 
-    } catch (tokenErr) {
-      try {
-        await authService.loginWithSession(
-          form.email,
-          form.password
-        )
-
-        const userData = {
-          name: form.email.split('@')[0],
-          email: form.email,
-          role: 'Operator',
-        }
-
-        login(userData, 'session-auth')
-
-        toast.success('Welcome back!')
-        navigate('/dashboard')
-
-      } catch {
+    } catch {
+      if (mode === 'register') {
+        setErrors({ general: 'Registration failed. Try a different email/username.' })
+        toast.error('Registration failed')
+      } else {
         setErrors({ general: 'Invalid email or password' })
         toast.error('Login failed')
       }
@@ -164,7 +167,7 @@ export function LoginPage() {
 
           <FormInput
             icon={Mail}
-            placeholder="Email"
+            placeholder="Email or username"
             value={form.email}
             onChange={e => setField('email', e.target.value)}
             error={errors.email}

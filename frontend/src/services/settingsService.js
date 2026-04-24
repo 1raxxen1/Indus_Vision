@@ -1,13 +1,23 @@
-// settingsService.js
-// GET /posts/api/settings/ and GET /posts/api/admin/
-
 import api from './api'
+import axios from 'axios'
+
+const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
 export const settingsService = {
-  getUserSettings:  () => api.get('/settings/'),
+  getUserSettings: (username = '') =>
+    axios.get(`${BASE_URL}/accounts/profile/`, { params: { username }, withCredentials: true }).then(r => r.data),
+
   getAdminSettings: () => api.get('/admin/'),
 
-  // These will be POST/PUT when you add write endpoints
-  // updateProfile:    (data) => api.put('/settings/', data),
-  // updatePassword:   (data) => api.post('/settings/password/', data),
+  updateProfile: (data) =>
+    axios.put(`${BASE_URL}/accounts/profile/`, data, {
+      headers: { 'Content-Type': 'application/json' },
+      withCredentials: true,
+    }).then(r => r.data),
+
+  updatePassword: (data) =>
+    axios.post(`${BASE_URL}/accounts/password/`, data, {
+      headers: { 'Content-Type': 'application/json' },
+      withCredentials: true,
+    }).then(r => r.data),
 }
