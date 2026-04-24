@@ -7,12 +7,22 @@ export const authService = {
   getLoginSummary: () => api.get('/login/'),
 
   login: async (email, password) => {
-    const res = await axios.post(
-      `${BASE_URL}/accounts/login/`,
-      { email, username: email, password },
-      { headers: { 'Content-Type': 'application/json' }, withCredentials: true }
-    )
-    return res.data
+    try {
+      const res = await axios.post(
+        `${BASE_URL}/accounts/login/`,
+        { email, username: email, password },
+        { headers: { 'Content-Type': 'application/json' }, withCredentials: true }
+      )
+      return res.data
+    } catch {
+      // Backward-compatible fallback if server is still using legacy posts auth endpoint
+      const res = await axios.post(
+        `${BASE_URL}/posts/authenticate/`,
+        { username: email, password },
+        { headers: { 'Content-Type': 'application/json' }, withCredentials: true }
+      )
+      return res.data
+    }
   },
 
   register: async ({ name, email, password }) => {

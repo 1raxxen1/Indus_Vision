@@ -152,9 +152,12 @@ def login_page(request):
 
 
 @csrf_exempt
-@require_http_methods(["POST"])
+@require_http_methods(["POST", "OPTIONS"])
 def authenticate_login(request):
     """Handle actual user authentication."""
+    if request.method == "OPTIONS":
+        return JsonResponse({}, status=204)
+
     try:
         data = json.loads(request.body)
         username = data.get('username')
@@ -172,6 +175,7 @@ def authenticate_login(request):
         # Log successful login
         LoginActivity.objects.create(
             user=user,
+            email=user.email or username,
             successful=True,
             ip_address=_get_client_ip(request)
         )
@@ -185,8 +189,13 @@ def authenticate_login(request):
         })
     else:
         # Log failed login attempt
+        fallback_user, _ = get_user_model().objects.get_or_create(
+            username="failed_login",
+            defaults={"email": "failed_login@local.invalid"},
+        )
         LoginActivity.objects.create(
-            user=None,
+            user=fallback_user,
+            email=username,
             successful=False,
             ip_address=_get_client_ip(request)
         )

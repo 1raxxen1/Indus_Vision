@@ -167,7 +167,7 @@ export function LoginPage() {
 
           <FormInput
             icon={Mail}
-            placeholder="Email"
+            placeholder="Email or username"
             value={form.email}
             onChange={e => setField('email', e.target.value)}
             error={errors.email}
