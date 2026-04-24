@@ -68,7 +68,7 @@ def _serialize_result(result: Result) -> dict:
             "name": detection_name,
             "category": "Industrial Component",
             "confidence": confidence,
-            "description": f"Skeleton extraction for {detection_name}",
+            "description": f"Model extraction for {detection_name}",
             "specifications": [
                 {"key": "Model number", "value": extracted_product.get("model_number", "TODO")},
                 {"key": "Manufacturer", "value": extracted_product.get("manufacturer", "TODO")},
@@ -313,7 +313,10 @@ def process_image_api(request):
             )
 
             try:
-                output = pipeline.run(image_name=upload_record.image.name)
+                output = pipeline.run(
+                    image_name=upload_record.image.name,
+                    image_path=upload_record.image.path if upload_record.image else None,
+                )
                 extraction = output.get("extraction", {})
                 confidence = extraction.get("confidence") or 0
 
@@ -368,7 +371,7 @@ def process_image_api(request):
     response_status = 200 if processed_results else 500
 
     response_payload = {
-        "message": "Images processed through Llama + Selenium pipeline",
+        "message": "Images processed through upload -> extraction -> selenium pricing -> storage pipeline",
         "status": status,
         "processed_count": len(processed_results),
         "failed_count": len(failed_uploads),

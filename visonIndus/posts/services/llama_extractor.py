@@ -1,35 +1,165 @@
+from __future__ import annotations
+
+import json
+import os
+import re
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+
+try:
+    from PIL import Image
+    PIL_AVAILABLE = True
+except Exception:  # pragma: no cover - optional runtime dependency
+    Image = None  # type: ignore[assignment]
+    PIL_AVAILABLE = False
+
+try:
+    import torch
+    from transformers import AutoProcessor, MllamaForConditionalGeneration
+
+    TRANSFORMERS_AVAILABLE = True
+except Exception:  # pragma: no cover - optional runtime dependency
+    torch = None  # type: ignore[assignment]
+    AutoProcessor = None  # type: ignore[assignment]
+    MllamaForConditionalGeneration = None  # type: ignore[assignment]
+    TRANSFORMERS_AVAILABLE = False
+
+
+@dataclass
+class ExtractorRuntimeConfig:
+    model_id: str = os.getenv("VISION_MODEL_ID", "unsloth/Llama-3.2-11B-Vision-Instruct-bnb-4bit")
+    adapter_path: str | None = os.getenv("VISION_ADAPTER_PATH")
+    max_new_tokens: int = int(os.getenv("VISION_MAX_NEW_TOKENS", "256"))
+    device: str = os.getenv("VISION_DEVICE", "cuda")
 
 
 class LlamaExtractorService:
-    """Skeleton service for Llama-based image->JSON extraction."""
+    """Image -> structured JSON extraction using Llama 3.2 Vision.
 
-    def __init__(self, model_name: str = "llama3.2-vision") -> None:
+    The service prefers loading a local fine-tuned adapter/base model when provided,
+    and gracefully falls back to a deterministic lightweight extractor if model
+    dependencies are unavailable.
+    """
+
+    def __init__(self, model_name: str = "llama3.2-vision", config: ExtractorRuntimeConfig | None = None) -> None:
         self.model_name = model_name
+        self.config = config or ExtractorRuntimeConfig()
+        self._model = None
+        self._processor = None
+        self._runtime_status = "not_loaded"
 
-    def extract_structured_data(self, image_name: str) -> dict[str, Any]:
-        """
-        Placeholder for real Llama integration.
+    def extract_structured_data(self, image_name: str, image_path: str | None = None) -> dict[str, Any]:
+        runtime_result = self._extract_with_runtime_model(image_name=image_name, image_path=image_path)
+        if runtime_result is not None:
+            return runtime_result
+        return self._fallback_extraction(image_name=image_name, image_path=image_path)
 
-        Replace this method with:
-        1) image preprocessing and OCR if needed
-        2) call to your Llama model endpoint/runtime
-        3) schema validation of the returned JSON
-        """
+    def _extract_with_runtime_model(self, image_name: str, image_path: str | None) -> dict[str, Any] | None:
+        if not image_path or not TRANSFORMERS_AVAILABLE or not PIL_AVAILABLE:
+            return None
+
+        try:
+            self._lazy_load_runtime()
+        except Exception:
+            return None
+
+        if not self._model or not self._processor:
+            return None
+
+        try:
+            image = Image.open(image_path).convert("RGB")
+            prompt = (
+                "Identify the industrial/electronic component in this image and return JSON only with keys: "
+                "product{name,model_number,manufacturer}, technical_datasheet{voltage,power,dimensions,raw_text}, "
+                "confidence."
+            )
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image"},
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ]
+            chat_text = self._processor.apply_chat_template(messages, add_generation_prompt=True)
+            inputs = self._processor(image, chat_text, return_tensors="pt")
+
+            if self.config.device == "cuda" and torch is not None and torch.cuda.is_available():
+                inputs = {key: value.to("cuda") for key, value in inputs.items()}
+
+            generated = self._model.generate(**inputs, max_new_tokens=self.config.max_new_tokens)
+            decoded = self._processor.decode(generated[0], skip_special_tokens=True)
+            payload = self._parse_json_from_text(decoded)
+            if payload:
+                payload.setdefault("model", self.config.model_id)
+                payload.setdefault("image_name", image_name)
+                payload.setdefault("status", "completed")
+                return payload
+        except Exception:
+            return None
+        return None
+
+    def _lazy_load_runtime(self) -> None:
+        if self._model is not None and self._processor is not None:
+            return
+        model_source = self.config.adapter_path or self.config.model_id
+        self._processor = AutoProcessor.from_pretrained(model_source)
+        self._model = MllamaForConditionalGeneration.from_pretrained(
+            model_source,
+            torch_dtype=torch.float16 if torch is not None else None,
+            device_map="auto",
+        )
+        self._runtime_status = "loaded"
+
+    def _fallback_extraction(self, image_name: str, image_path: str | None) -> dict[str, Any]:
+        inferred_name = self._guess_component_name(image_name=image_name, image_path=image_path)
         return {
             "model": self.model_name,
             "image_name": image_name,
             "product": {
-                "name": "TODO: extracted product name",
-                "model_number": "TODO: extracted model number",
-                "manufacturer": "TODO: extracted manufacturer",
+                "name": inferred_name,
+                "model_number": self._guess_model_number(image_name),
+                "manufacturer": "Unknown",
             },
             "technical_datasheet": {
-                "voltage": "TODO",
-                "power": "TODO",
-                "dimensions": "TODO",
-                "raw_text": "TODO: OCR/vision text",
+                "voltage": "Unknown",
+                "power": "Unknown",
+                "dimensions": "Unknown",
+                "raw_text": f"Fallback extraction from filename: {Path(image_name).name}",
             },
-            "confidence": 0.0,
-            "status": "skeleton",
+            "confidence": 0.35,
+            "status": "fallback",
+            "runtime": {
+                "transformers_available": TRANSFORMERS_AVAILABLE,
+                "runtime_status": self._runtime_status,
+            },
         }
+
+    def _guess_component_name(self, image_name: str, image_path: str | None) -> str:
+        corpus = " ".join(part for part in [image_name, image_path or ""] if part).lower()
+        if "solenoid" in corpus:
+            return "Solenoid"
+        if "resistor" in corpus:
+            return "Resistor"
+        if "capacitor" in corpus:
+            return "Capacitor"
+        if "relay" in corpus:
+            return "Relay"
+        return "Industrial Component"
+
+    def _guess_model_number(self, image_name: str) -> str:
+        match = re.search(r"([A-Za-z]{1,4}-?\d{2,6}[A-Za-z0-9-]*)", image_name)
+        return match.group(1) if match else "Unknown"
+
+    def _parse_json_from_text(self, text: str) -> dict[str, Any] | None:
+        direct = text.strip()
+        for candidate in [direct, *re.findall(r"\{[\s\S]*\}", text)]:
+            try:
+                parsed = json.loads(candidate)
+                if isinstance(parsed, dict):
+                    return parsed
+            except json.JSONDecodeError:
+                continue
+        return None

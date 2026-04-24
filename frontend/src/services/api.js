@@ -1,12 +1,15 @@
 // src/services/api.js
 import axios from 'axios'
 
+const envBase = import.meta.env.VITE_API_BASE_URL
+const defaultBase = '/posts/api'
+
 const api = axios.create({
-  baseURL:         'http://localhost:8000/posts/api',
-  timeout:         120000,  // 2 min — Llama pipeline can be slow
+  baseURL: envBase || defaultBase,
+  timeout: 120000, // 2 min — Llama pipeline can be slow
   withCredentials: true,
   headers: {
-    'Accept': 'application/json',
+    Accept: 'application/json',
   },
 })
 
@@ -24,11 +27,12 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    const status  = error.response?.status
-    const message = error.response?.data?.error
-                 || error.response?.data?.message
-                 || error.message
-                 || 'Request failed'
+    const status = error.response?.status
+    const message =
+      error.response?.data?.error ||
+      error.response?.data?.message ||
+      error.message ||
+      'Request failed'
     return Promise.reject({ status, message, raw: error })
   }
 )
