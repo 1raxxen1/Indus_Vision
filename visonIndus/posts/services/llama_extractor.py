@@ -84,13 +84,20 @@ class LlamaExtractorService:
                 }
             ]
             chat_text = self._processor.apply_chat_template(messages, add_generation_prompt=True)
-            inputs = self._processor(image, chat_text, return_tensors="pt")
+            inputs = self._processor(
+                text=chat_text,
+                images=image,
+                return_tensors="pt",
+            )
 
             if self.config.device == "cuda" and torch is not None and torch.cuda.is_available():
                 inputs = {key: value.to("cuda") for key, value in inputs.items()}
 
             generated = self._model.generate(**inputs, max_new_tokens=self.config.max_new_tokens)
-            decoded = self._processor.decode(generated[0], skip_special_tokens=True)
+            generated_tokens = generated[0]
+            input_length = inputs["input_ids"].shape[-1] if "input_ids" in inputs else 0
+            completion_tokens = generated_tokens[input_length:] if input_length else generated_tokens
+            decoded = self._processor.decode(completion_tokens, skip_special_tokens=True)
             payload = self._parse_json_from_text(decoded)
             if payload:
                 payload.setdefault("model", self.config.model_id)
