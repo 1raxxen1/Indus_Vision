@@ -69,3 +69,13 @@ Thumbs.db
 final_year_report.docx
 Conference Submission.pdf
 splnproc template word.docm
+
+# Binary/model artifacts (avoid PR binary diff issues)
+frontend/src/assets/hero.png
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.ckpt
+*.onnx
+*.tflite
