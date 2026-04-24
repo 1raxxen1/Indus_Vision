@@ -220,11 +220,11 @@ class SeleniumPricingService:
                     "source": source.name,
                     "currency": "INR",
                     "price": None,
-                    "availability": "selenium_skipped",
+                    "availability": "driver_unavailable",
                     "url": source.search_url_template.format(query=quote_plus(query)),
                 }
                 for source in self.SOURCES
             ],
-            "status": "selenium_skipped",
+            "status": "driver_unavailable",
             "error": str(error),
         }

@@ -1,0 +1,57 @@
+name: CD (No Docker)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    name: Deploy via SSH (systemd + rsync)
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Sync repository to VM
+        run: |
+          rsync -avz --delete ./ \
+            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:${{ secrets.DEPLOY_PATH }}"
+
+      - name: Install deps + migrate + collectstatic + restart services
+        run: |
+          ssh "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" << 'EOF'
+            set -e
+            cd "${{ secrets.DEPLOY_PATH }}"
+
+            # Backend
+            python3 -m venv .venv || true
+            source .venv/bin/activate
+            python -m pip install --upgrade pip
+            pip install -r requirements.txt
+            cd visonIndus
+            python manage.py migrate --noinput
+            python manage.py collectstatic --noinput || true
+            cd ..
+
+            # Frontend
+            cd frontend
+            npm ci
+            npm run build
+            cd ..
+
+            # Restart app services (names are examples; update to your VM)
+            sudo systemctl restart indus-gunicorn
+            sudo systemctl restart indus-nginx
+          EOF

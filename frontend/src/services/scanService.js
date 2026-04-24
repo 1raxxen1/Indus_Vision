@@ -40,4 +40,8 @@ export const scanService = {
   // ── GET /posts/api/results/<id>/ ──────────────────────────────
   // Returns one normalized result payload
   getResultById: (id) => api.get(`/results/${id}/`),
+
+  // ── POST /posts/api/scan-inventory/ ───────────────────────────
+  // Saves a processed scan as an inventory item
+  saveToInventory: (payload) => api.post('/scan-inventory/', payload),
 }

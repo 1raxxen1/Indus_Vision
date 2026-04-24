@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from posts.services.llama_extractor import LlamaExtractorService
 from posts.services.selenium_pricing import SeleniumPricingService
+from inventory_app.models import InventoryScan
 from results_app.models import Result
 from uploads_app.models import Upload
 
@@ -136,6 +137,47 @@ class ProcessImageApiTests(TestCase):
         self.assertIn("pricing", payload)
         self.assertIn("ocr", payload)
 
+    def test_results_page_normalizes_fractional_confidence_for_history(self):
+        image = SimpleUploadedFile(
+            "sample.png",
+            b"fake-image-binary",
+            content_type="image/png",
+        )
+        self.client.post("/posts/api/process-image/", data={"image": image})
+
+        response = self.client.get("/posts/api/results/")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        first = payload["results"][0]
+        self.assertGreaterEqual(first["confidence"], 0)
+        self.assertLessEqual(first["confidence"], 100)
+
+    def test_scan_inventory_post_saves_result_as_inventory_item(self):
+        image = SimpleUploadedFile(
+            "sample.png",
+            b"fake-image-binary",
+            content_type="image/png",
+        )
+        process_response = self.client.post(
+            "/posts/api/process-image/",
+            data={"image": image},
+        )
+        result_id = process_response.json()["result"]["id"]
+
+        response = self.client.post(
+            "/posts/api/scan-inventory/",
+            data=json.dumps({"result_id": result_id, "quantity": 2}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        self.assertEqual(payload["status"], "saved")
+        self.assertEqual(InventoryScan.objects.count(), 1)
+        scan = InventoryScan.objects.first()
+        self.assertEqual(scan.quantity, 2)
+        self.assertEqual(scan.upload_id, Result.objects.get(id=result_id).upload_id)
+
 
 class SeleniumPricingServiceTests(TestCase):
     def test_extract_first_price_from_inr_text(self):
@@ -200,3 +242,30 @@ class LlamaExtractorServiceTests(TestCase):
         )
         self.assertEqual(payload["product"]["name"], "Servo Motor")
         self.assertEqual(payload["status"], "completed")
+
+    @patch.object(LlamaExtractorService, "_extract_with_runtime_model", return_value=None)
+    @patch.object(
+        LlamaExtractorService,
+        "_extract_with_backup_runtime_model",
+        return_value={
+            "product": {"name": "Backup Motor", "model_number": "BK-22", "manufacturer": "BackupCo"},
+            "technical_datasheet": {
+                "voltage": "24V",
+                "power": "12W",
+                "dimensions": "10x5x3",
+                "raw_text": "backup extraction",
+            },
+            "confidence": 0.86,
+            "status": "completed",
+        },
+    )
+    def test_backup_runtime_selected_when_primary_runtime_unavailable(
+        self,
+        _mock_backup,
+        _mock_primary,
+    ):
+        service = LlamaExtractorService()
+        payload = service.extract_structured_data(image_name="motor.png", image_path="/tmp/motor.png")
+
+        self.assertEqual(payload["product"]["name"], "Backup Motor")
+        self.assertEqual(payload["selection"]["chosen"], "backup")
