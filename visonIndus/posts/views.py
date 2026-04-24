@@ -304,6 +304,7 @@ def admin_page(request):
     )
 
 
+@csrf_exempt
 @require_http_methods(["POST"])
 def process_image_api(request):
     """React API endpoint for Llama -> Selenium pipeline (single or multi-image)."""

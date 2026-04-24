@@ -2,15 +2,30 @@ import base64
 import json
 
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase
-from unittest.mock import patch
+from django.test import Client, TestCase
+from unittest.mock import MagicMock, patch
 
+from posts.services.llama_extractor import LlamaExtractorService
 from posts.services.selenium_pricing import SeleniumPricingService
 from results_app.models import Result
 from uploads_app.models import Upload
 
 
 class ProcessImageApiTests(TestCase):
+    def test_process_image_is_csrf_exempt_for_frontend_uploads(self):
+        image = SimpleUploadedFile(
+            "sample.png",
+            b"fake-image-binary",
+            content_type="image/png",
+        )
+        csrf_client = Client(enforce_csrf_checks=True)
+        response = csrf_client.post(
+            "/posts/api/process-image/",
+            data={"image": image},
+        )
+
+        self.assertEqual(response.status_code, 200)
+
     def test_process_image_requires_file_upload(self):
         response = self.client.post(
             "/posts/api/process-image/",
@@ -132,3 +147,56 @@ class SeleniumPricingServiceTests(TestCase):
             ]
         )
         self.assertEqual(price, 12499.0)
+
+    def test_lookup_prices_returns_driver_unavailable_payload_when_webdriver_missing(self):
+        service = SeleniumPricingService()
+        extracted_payload = {
+            "product": {
+                "name": "Servo Motor",
+                "model_number": "SV-100",
+            }
+        }
+
+        with patch("posts.services.selenium_pricing.SELENIUM_AVAILABLE", False):
+            result = service.lookup_prices(extracted_payload)
+
+        self.assertEqual(result["status"], "driver_unavailable")
+        self.assertEqual(len(result["prices"]), len(SeleniumPricingService.SOURCES))
+
+
+class LlamaExtractorServiceTests(TestCase):
+    @patch("posts.services.llama_extractor.PIL_AVAILABLE", True)
+    @patch("posts.services.llama_extractor.TRANSFORMERS_AVAILABLE", True)
+    @patch("posts.services.llama_extractor.Image")
+    def test_runtime_model_path_uses_text_and_image_inputs(self, mock_image_module):
+        mock_image = MagicMock()
+        mock_image.convert.return_value = "rgb-image"
+        mock_image_module.open.return_value = mock_image
+
+        service = LlamaExtractorService()
+        processor = MagicMock()
+        processor.apply_chat_template.return_value = "chat prompt"
+        processor.return_value = {"input_ids": MagicMock(shape=(1, 3))}
+        processor.decode.return_value = (
+            '{"product":{"name":"Servo Motor","model_number":"SV-100","manufacturer":"Acme"},'
+            '"technical_datasheet":{"voltage":"24V","power":"10W","dimensions":"10x5x3","raw_text":"SV-100"},'
+            '"confidence":0.93}'
+        )
+        model = MagicMock()
+        model.generate.return_value = [[101, 102, 103, 104, 105]]
+
+        service._processor = processor
+        service._model = model
+
+        payload = service.extract_structured_data(
+            image_name="servo.jpg",
+            image_path="/tmp/servo.jpg",
+        )
+
+        processor.assert_called_once_with(
+            text="chat prompt",
+            images="rgb-image",
+            return_tensors="pt",
+        )
+        self.assertEqual(payload["product"]["name"], "Servo Motor")
+        self.assertEqual(payload["status"], "completed")
