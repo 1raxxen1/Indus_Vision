@@ -1,6 +1,6 @@
 // UploadPage.jsx
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { DropZone } from '../../components/upload/DropZone'
 import { ImagePreviewCard } from '../../components/upload/ImagePreviewCard'
@@ -32,6 +32,7 @@ const STEPS = [
 
 export function UploadPage() {
   const navigate = useNavigate()
+  const objectUrlsRef = useRef(new Set())
 
   const [queue, setQueue] = useState([])
   const [isAnalysing, setIsAnalysing] = useState(false)
@@ -45,6 +46,7 @@ export function UploadPage() {
       file,
       previewUrl: URL.createObjectURL(file),
     }))
+    entries.forEach(entry => objectUrlsRef.current.add(entry.previewUrl))
     setQueue(prev => [...prev, ...entries])
   }, [])
 
@@ -52,7 +54,11 @@ export function UploadPage() {
   // ── Remove file ─────────────────────
   function removeFile(index) {
     setQueue(prev => {
-      URL.revokeObjectURL(prev[index].previewUrl)
+      const removed = prev[index]
+      if (removed?.previewUrl) {
+        URL.revokeObjectURL(removed.previewUrl)
+        objectUrlsRef.current.delete(removed.previewUrl)
+      }
       return prev.filter((_, i) => i !== index)
     })
   }
@@ -60,7 +66,10 @@ export function UploadPage() {
 
   // ── Clear queue ─────────────────────
   function clearQueue() {
-    queue.forEach(item => URL.revokeObjectURL(item.previewUrl))
+    queue.forEach(item => {
+      URL.revokeObjectURL(item.previewUrl)
+      objectUrlsRef.current.delete(item.previewUrl)
+    })
     setQueue([])
   }
 
@@ -68,7 +77,8 @@ export function UploadPage() {
   // ── Cleanup ─────────────────────────
   useEffect(() => {
     return () => {
-      queue.forEach(item => URL.revokeObjectURL(item.previewUrl))
+      objectUrlsRef.current.forEach(url => URL.revokeObjectURL(url))
+      objectUrlsRef.current.clear()
     }
   }, [])
 
@@ -103,6 +113,10 @@ export function UploadPage() {
           item.file,
           item.file.name
         )
+        const payload =
+          res && typeof res === 'object' && 'data' in res
+            ? res.data
+            : (res ?? null)
 
         // Step progression (UX)
         setCurrentStep(1)
@@ -114,7 +128,7 @@ export function UploadPage() {
         setCurrentStep(3)
         await new Promise(r => setTimeout(r, 300))
 
-        results.push(res)
+        results.push(payload)
       }
 
       setIsDone(true)
@@ -122,22 +136,23 @@ export function UploadPage() {
 
       await new Promise(r => setTimeout(r, 600))
 
-      const first = results[0] || {}
+      const latest = results[results.length - 1] || results[0] || {}
 
       navigate('/results', {
         state: {
           resultId:
-            first.result?.id ??
-            first.result_id ??
-            first.scan_id ??
-            first.id,
+            latest.result?.id ??
+            latest.result_id ??
+            latest.scan_id ??
+            latest.id,
 
           scanId:
-            first.scan_id ??
-            first.result?.id ??
-            first.id,
+            latest.scan_id ??
+            latest.result?.id ??
+            latest.id,
 
-          result: first,
+          result: latest,
+          apiResponse: latest,
         }
       })
 

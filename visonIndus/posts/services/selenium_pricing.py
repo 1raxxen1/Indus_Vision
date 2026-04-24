@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import os
 from dataclasses import dataclass
 from urllib.parse import quote_plus
 
@@ -63,8 +64,13 @@ class SeleniumPricingService:
     )
     PRICE_PATTERN = re.compile(r"(?:₹|INR|Rs\.?)\s*([\d,]+(?:\.\d{1,2})?)", re.IGNORECASE)
 
-    def __init__(self, timeout_seconds: int = 12) -> None:
-        self.timeout_seconds = timeout_seconds
+    def __init__(self, timeout_seconds: int = 8, fail_fast_on_driver_errors: bool | None = None) -> None:
+        self.timeout_seconds = int(os.getenv("SELENIUM_TIMEOUT_SECONDS", str(timeout_seconds)))
+        if fail_fast_on_driver_errors is None:
+            env_value = os.getenv("SELENIUM_FAIL_FAST", "true").strip().lower()
+            self.fail_fast_on_driver_errors = env_value in {"1", "true", "yes", "on"}
+        else:
+            self.fail_fast_on_driver_errors = fail_fast_on_driver_errors
 
     def lookup_prices(self, extracted_payload: dict[str, Any]) -> dict[str, Any]:
         product = extracted_payload.get("product", {})
@@ -83,9 +89,27 @@ class SeleniumPricingService:
             return self._driver_failure_response(product=product, query=query, error=exc)
 
         prices: list[dict[str, Any]] = []
+        consecutive_driver_failures = 0
         try:
-            for source in self.SOURCES:
-                prices.append(self._lookup_single_source(driver=driver, source=source, query=query))
+            for index, source in enumerate(self.SOURCES):
+                source_result = self._lookup_single_source(driver=driver, source=source, query=query)
+                prices.append(source_result)
+
+                if source_result.get("availability") in {"driver_error", "timeout"}:
+                    consecutive_driver_failures += 1
+                else:
+                    consecutive_driver_failures = 0
+
+                if self.fail_fast_on_driver_errors and consecutive_driver_failures >= 2:
+                    for remaining_source in self.SOURCES[index + 1:]:
+                        prices.append(
+                            self._empty_source_row(
+                                source=remaining_source,
+                                search_url=remaining_source.search_url_template.format(query=quote_plus(query)),
+                                availability="skipped_after_driver_failures",
+                            )
+                        )
+                    break
         finally:
             driver.quit()
 
@@ -101,6 +125,10 @@ class SeleniumPricingService:
                 "lowest_price": min(numeric_prices) if numeric_prices else None,
                 "highest_price": max(numeric_prices) if numeric_prices else None,
                 "sources_checked": len(self.SOURCES),
+                "sources_returned": len(prices),
+                "skipped_sources": len(
+                    [row for row in prices if row.get("availability") == "skipped_after_driver_failures"]
+                ),
             },
             "status": "completed" if numeric_prices else "no_prices_found",
         }
@@ -192,11 +220,11 @@ class SeleniumPricingService:
                     "source": source.name,
                     "currency": "INR",
                     "price": None,
-                    "availability": "driver_unavailable",
+                    "availability": "selenium_skipped",
                     "url": source.search_url_template.format(query=quote_plus(query)),
                 }
                 for source in self.SOURCES
             ],
-            "status": "driver_unavailable",
+            "status": "selenium_skipped",
             "error": str(error),
         }
