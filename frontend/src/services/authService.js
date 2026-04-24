@@ -21,15 +21,13 @@ export const authService = {
   //   Add 'rest_framework.authtoken' to INSTALLED_APPS
   //   URL: path('api-token-auth/', obtain_auth_token)
   login: async (email, password) => {
-    // Try token auth endpoint first
-    // If you haven't set this up yet, this will fail
-    // and you can use the session-based fallback below
+    // Use the custom authenticate endpoint
     const res = await axios.post(
-      `${BASE_URL}/api-token-auth/`,
+      `${BASE_URL}/posts/authenticate/`,
       { username: email, password },
       { headers: { 'Content-Type': 'application/json' } }
     )
-    return res.data  // returns { token: "abc123" }
+    return res.data  // returns { success: true, user: {...} }
   },
 
   // ── Session-based login (Django's built-in) ──

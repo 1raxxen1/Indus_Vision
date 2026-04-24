@@ -88,21 +88,26 @@ export function LoginPage() {
     setLoading(true)
 
     try {
-      const tokenData = await authService.login(
+      const response = await authService.login(
         form.email,
         form.password
       )
 
-      const userData = {
-        name: form.email.split('@')[0],
-        email: form.email,
-        role: 'Operator',
+      if (response.success) {
+        const userData = {
+          id: response.user.id,
+          name: response.user.username,
+          email: response.user.email,
+          role: 'Operator',
+        }
+
+        login(userData, 'authenticated')
+
+        toast.success('Welcome back!')
+        navigate('/dashboard')
+      } else {
+        throw new Error(response.error || 'Login failed')
       }
-
-      login(userData, tokenData.token)
-
-      toast.success('Welcome back!')
-      navigate('/dashboard')
 
     } catch (tokenErr) {
       try {

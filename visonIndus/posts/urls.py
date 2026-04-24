@@ -6,6 +6,7 @@ urlpatterns = [
     # legacy/basic routes
     path('', views.post_list, name='posts-home'),
     path('login/', views.login_page, name='posts-login'),
+    path('authenticate/', views.authenticate_login, name='posts-authenticate'),
     path('dashboard/', views.dashboard_page, name='posts-dashboard'),
     path('upload/', views.upload_page, name='posts-upload'),
     path('results/', views.results_page, name='posts-results'),

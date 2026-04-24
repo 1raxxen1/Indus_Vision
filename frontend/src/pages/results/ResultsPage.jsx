@@ -1,4 +1,4 @@
-import { useNavigate, useLocation } from 'react-router-dom'
+﻿import { useNavigate, useLocation } from 'react-router-dom'
 import { useApi } from '../../hooks/useApi'
 import { scanService } from '../../services/scanService'
 import { LoadingSpinner } from '../../components/ui/LoadingSpinner'
@@ -246,7 +246,6 @@ export function ResultsPage() {
         </div>
 
       </div>
-      )}
     </div>
   )
 }

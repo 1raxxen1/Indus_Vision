@@ -6,6 +6,7 @@ from django.core.files.base import ContentFile
 from django.http import JsonResponse
 from django.db import transaction
 from django.views.decorators.http import require_GET, require_http_methods
+from django.views.decorators.csrf import csrf_exempt
 
 from accounts_app.models import LoginActivity
 from analytics_app.models import Analytics
@@ -148,6 +149,55 @@ def login_page(request):
             "failed_login_events": LoginActivity.objects.filter(successful=False).count(),
         }
     )
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def authenticate_login(request):
+    """Handle actual user authentication."""
+    try:
+        data = json.loads(request.body)
+        username = data.get('username')
+        password = data.get('password')
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    if not username or not password:
+        return JsonResponse({"error": "Username and password required"}, status=400)
+
+    from django.contrib.auth import authenticate
+    user = authenticate(username=username, password=password)
+
+    if user is not None:
+        # Log successful login
+        LoginActivity.objects.create(
+            user=user,
+            successful=True,
+            ip_address=_get_client_ip(request)
+        )
+        return JsonResponse({
+            "success": True,
+            "user": {
+                "id": user.id,
+                "username": user.username,
+                "email": user.email,
+            }
+        })
+    else:
+        # Log failed login attempt
+        LoginActivity.objects.create(
+            user=None,
+            successful=False,
+            ip_address=_get_client_ip(request)
+        )
+        return JsonResponse({"success": False, "error": "Invalid credentials"}, status=401)
+
+
+def _get_client_ip(request):
+    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+    if x_forwarded_for:
+        return x_forwarded_for.split(',')[0].strip()
+    return request.META.get('REMOTE_ADDR', '')
 
 
 @require_GET
