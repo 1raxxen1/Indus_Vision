@@ -48,6 +48,7 @@ class LlamaExtractorService:
         self._model = None
         self._processor = None
         self._runtime_status = "not_loaded"
+        self._runtime_error = ""
 
     def extract_structured_data(self, image_name: str, image_path: str | None = None) -> dict[str, Any]:
         runtime_result = self._extract_with_runtime_model(image_name=image_name, image_path=image_path)
@@ -56,15 +57,25 @@ class LlamaExtractorService:
         return self._fallback_extraction(image_name=image_name, image_path=image_path)
 
     def _extract_with_runtime_model(self, image_name: str, image_path: str | None) -> dict[str, Any] | None:
-        if not image_path or not TRANSFORMERS_AVAILABLE or not PIL_AVAILABLE:
+        if not image_path:
+            self._runtime_status = "image_not_provided"
+            return None
+        if not TRANSFORMERS_AVAILABLE:
+            self._runtime_status = "missing_transformers_dependency"
+            return None
+        if not PIL_AVAILABLE:
+            self._runtime_status = "missing_pillow_dependency"
             return None
 
         try:
             self._lazy_load_runtime()
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            self._runtime_status = "model_load_failed"
+            self._runtime_error = str(exc)
             return None
 
         if not self._model or not self._processor:
+            self._runtime_status = "model_unavailable"
             return None
 
         try:
@@ -103,8 +114,11 @@ class LlamaExtractorService:
                 payload.setdefault("model", self.config.model_id)
                 payload.setdefault("image_name", image_name)
                 payload.setdefault("status", "completed")
+                payload["runtime"] = self._build_runtime_payload(mode="runtime_model")
                 return payload
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            self._runtime_status = "inference_failed"
+            self._runtime_error = str(exc)
             return None
         return None
 
@@ -119,6 +133,7 @@ class LlamaExtractorService:
             device_map="auto",
         )
         self._runtime_status = "loaded"
+        self._runtime_error = ""
 
     def _fallback_extraction(self, image_name: str, image_path: str | None) -> dict[str, Any]:
         inferred_name = self._guess_component_name(image_name=image_name, image_path=image_path)
@@ -138,10 +153,24 @@ class LlamaExtractorService:
             },
             "confidence": 0.35,
             "status": "fallback",
-            "runtime": {
-                "transformers_available": TRANSFORMERS_AVAILABLE,
-                "runtime_status": self._runtime_status,
-            },
+            "runtime": self._build_runtime_payload(mode="fallback"),
+        }
+
+    def _build_runtime_payload(self, mode: str) -> dict[str, Any]:
+        device_used = (
+            "cuda"
+            if self.config.device == "cuda" and torch is not None and torch.cuda.is_available()
+            else "cpu"
+        )
+        return {
+            "mode": mode,
+            "transformers_available": TRANSFORMERS_AVAILABLE,
+            "pillow_available": PIL_AVAILABLE,
+            "runtime_status": self._runtime_status,
+            "runtime_error": self._runtime_error,
+            "model_source": self.config.adapter_path or self.config.model_id,
+            "requested_device": self.config.device,
+            "used_device": device_used,
         }
 
     def _guess_component_name(self, image_name: str, image_path: str | None) -> str:

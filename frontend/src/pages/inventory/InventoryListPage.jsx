@@ -63,7 +63,7 @@ export function InventoryListPage() {
 
 
   // ── Handle BOTH API cases ───────────
-  const hasItems = Array.isArray(data.items)
+  const hasItems = Array.isArray(data.items) && data.items.length > 0
 
   const allItems = hasItems
     ? data.items.map(item => ({
