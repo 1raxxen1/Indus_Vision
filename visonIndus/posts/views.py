@@ -5,6 +5,7 @@ from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
 from django.http import JsonResponse
 from django.db import transaction
+from django.db.utils import OperationalError, ProgrammingError
 from django.views.decorators.http import require_GET, require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 
@@ -16,6 +17,8 @@ from inventory_app.models import InventoryScan
 from results_app.models import Result
 from uploads_app.models import Upload
 from .services import ImageToPricePipeline
+
+PIPELINE = ImageToPricePipeline()
 
 
 def _resolve_upload_user(request):
@@ -97,6 +100,7 @@ def _serialize_result(result: Result) -> dict:
             "technical_datasheet": technical_datasheet,
             "price_details": pricing_payload,
         },
+        "runtime_flags": model_output.get("runtime", {}),
     }
 
 
@@ -235,10 +239,67 @@ def upload_page(request):
 
 @require_GET
 def results_page(request):
+    try:
+        results = list(Result.objects.select_related("upload").order_by("-created_at")[:100])
+    except (OperationalError, ProgrammingError):
+        results = []
+    serialized_results = []
+    for result in results:
+        product = (result.model_output or {}).get("product", {})
+        runtime = (result.model_output or {}).get("runtime", {})
+        serialized_results.append(
+            {
+                "id": result.id,
+                "scan_id": result.id,
+                "name": product.get("name") or result.upload.source_name or "Unknown",
+                "component_name": product.get("name") or result.upload.source_name or "Unknown",
+                "status": "review" if runtime.get("mode") == "fallback" else "completed",
+                "confidence": int(float(result.confidence_score or 0)),
+                "created_at": result.created_at.isoformat(),
+                "time": result.created_at.strftime("%H:%M"),
+                "date": result.created_at.strftime("%Y-%m-%d"),
+                "runtime_mode": runtime.get("mode", "unknown"),
+                "runtime_status": runtime.get("runtime_status", "unknown"),
+            }
+        )
+
+    if not serialized_results:
+        try:
+            uploads_without_results = list(
+                Upload.objects.filter(result__isnull=True).order_by("-created_at")[:100]
+            )
+        except (OperationalError, ProgrammingError):
+            uploads_without_results = []
+
+        serialized_results.extend(
+            {
+                "id": upload.id,
+                "scan_id": upload.id,
+                "name": upload.source_name or "Uploaded component",
+                "component_name": upload.source_name or "Uploaded component",
+                "status": "review" if upload.status in {"queued", "processing"} else upload.status,
+                "confidence": 0,
+                "created_at": upload.created_at.isoformat(),
+                "time": upload.created_at.strftime("%H:%M"),
+                "date": upload.created_at.strftime("%Y-%m-%d"),
+                "runtime_mode": "not_processed",
+                "runtime_status": upload.status,
+            }
+            for upload in uploads_without_results
+        )
+
+    try:
+        total_results = Result.objects.count()
+        latest_result_id = Result.objects.order_by("-id").values_list("id", flat=True).first()
+    except (OperationalError, ProgrammingError):
+        total_results = 0
+        latest_result_id = None
+
     return JsonResponse(
         {
-            "total_results": Result.objects.count(),
-            "latest_result_id": Result.objects.order_by("-id").values_list("id", flat=True).first(),
+            "total_results": total_results,
+            "latest_result_id": latest_result_id,
+            "results": serialized_results,
         }
     )
 
@@ -247,7 +308,40 @@ def results_page(request):
 def result_detail_api(request, result_id: int):
     try:
         result = Result.objects.select_related("upload").get(id=result_id)
-    except Result.DoesNotExist:
+    except (Result.DoesNotExist, OperationalError, ProgrammingError):
+        try:
+            upload = Upload.objects.filter(id=result_id).first()
+        except (OperationalError, ProgrammingError):
+            upload = None
+        if upload:
+            return JsonResponse(
+                {
+                    "scanId": upload.id,
+                    "scanTime": upload.created_at.isoformat(),
+                    "imageUrl": upload.image.url if upload.image else None,
+                    "detection": {
+                        "name": upload.source_name or "Uploaded component",
+                        "category": "Pending analysis",
+                        "confidence": 0,
+                        "description": "No AI result has been stored for this upload yet.",
+                        "specifications": [],
+                    },
+                    "ocr": {"texts": []},
+                    "pricing": {
+                        "priceMin": None,
+                        "priceMax": None,
+                        "perUnit": None,
+                        "trend": "neutral",
+                        "suppliers": [],
+                    },
+                    "storage": {"uploadId": upload.id, "uploadStatus": upload.status},
+                    "runtime_flags": {
+                        "mode": "not_processed",
+                        "runtime_status": upload.status,
+                        "runtime_error": "",
+                    },
+                }
+            )
         return JsonResponse(
             {
                 "error": "Result not found",
@@ -261,10 +355,35 @@ def result_detail_api(request, result_id: int):
 
 @require_GET
 def scan_inventory_page(request):
+    try:
+        scans = list(InventoryScan.objects.select_related("upload").order_by("-created_at")[:200])
+    except (OperationalError, ProgrammingError):
+        scans = []
+
+    items = [
+        {
+            "id": scan.id,
+            "name": scan.item_name,
+            "part_number": scan.sku or "",
+            "category": "Industrial Component",
+            "quantity": scan.quantity,
+            "unit_price": float(scan.unit_price) if scan.unit_price is not None else 0,
+            "total_value": float(scan.unit_price or 0) * scan.quantity,
+            "status": "Low stock" if scan.quantity <= 2 else "In stock",
+            "last_scan": scan.created_at.isoformat(),
+        }
+        for scan in scans
+    ]
+
     return JsonResponse(
         {
-            "inventory_scans": InventoryScan.objects.count(),
-            "total_quantity": sum(InventoryScan.objects.values_list("quantity", flat=True)),
+            "inventory_scans": len(scans),
+            "total_quantity": sum(scan.quantity for scan in scans),
+            "total_items": len(scans),
+            "total_value": sum(item["total_value"] for item in items),
+            "low_stock": len([item for item in items if item["status"] == "Low stock"]),
+            "out_of_stock": len([item for item in items if item["quantity"] == 0]),
+            "items": items,
         }
     )
 
@@ -358,7 +477,6 @@ def process_image_api(request):
         )
 
     upload_user = _resolve_upload_user(request)
-    pipeline = ImageToPricePipeline()
     processed_results: list[dict] = []
     failed_uploads: list[dict] = []
 
@@ -373,7 +491,7 @@ def process_image_api(request):
             )
 
             try:
-                output = pipeline.run(
+                output = PIPELINE.run(
                     image_name=upload_record.image.name,
                     image_path=upload_record.image.path if upload_record.image else None,
                 )
@@ -406,6 +524,7 @@ def process_image_api(request):
                             "details_endpoint": f"/posts/api/results/{result_record.id}/",
                         },
                         "output": output,
+                        "runtime_flags": output.get("runtime_flags", {}),
                         "display": _serialize_result(result_record),
                     }
                 )

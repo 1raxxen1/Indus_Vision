@@ -75,6 +75,11 @@ function parseSpecs(datasheet) {
   return []
 }
 
+function parsePriceValue(value) {
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : null
+}
+
 
 // ═══════════════════════════════════════
 // RESULTS PAGE
@@ -90,10 +95,17 @@ export function ResultsPage() {
 
   // ── API FETCH (ONLY if needed) ───────
   const { data, loading, error, refetch } = useApi(
-    () => {
+    async () => {
       if (apiResponse) return Promise.resolve(apiResponse)
       if (passedResult) return Promise.resolve(passedResult)
       if (resultId) return scanService.getResultById(resultId)
+      const resultsResponse = await scanService.getResults()
+      const resultsPayload =
+        resultsResponse && typeof resultsResponse === 'object' && 'data' in resultsResponse
+          ? resultsResponse.data
+          : (resultsResponse ?? null)
+      const latestId = resultsPayload?.latest_result_id
+      if (latestId) return scanService.getResultById(latestId)
       return Promise.resolve(null)
     },
     [resultId]
@@ -108,6 +120,12 @@ export function ResultsPage() {
   const output = data.output ?? {}
   const extraction = output.extraction ?? data.detection ?? {}
   const pricing = output.pricing ?? data.pricing ?? {}
+  const product = extraction.product ?? {}
+  const technical = extraction.technical_datasheet ?? {}
+  const supplierRows = Array.isArray(pricing.prices) ? pricing.prices : []
+  const supplierPrices = supplierRows
+    .map(row => parsePriceValue(row?.price))
+    .filter(price => price !== null)
 
   const result = {
     scanId:
@@ -117,64 +135,86 @@ export function ResultsPage() {
       resultId,
 
     scanTime:
+      data.scanTime ??
       data.created_at ??
       new Date().toLocaleString(),
 
     imageUrl:
+      data.imageUrl ??
       data.image_url ??
       data.upload?.image_url ??
       null,
 
     detection: {
       name:
+        product.name ??
         extraction.component_name ??
         extraction.name ??
+        data.detection?.name ??
         'Component identified',
 
       category:
+        data.detection?.category ??
         extraction.category ??
         'Unknown',
 
       confidence:
-        Number(extraction.confidence ?? 0),
+        Number(data.detection?.confidence ?? extraction.confidence ?? data.confidence ?? 0),
 
       description:
+        data.detection?.description ??
         extraction.description ??
-        'AI analysis complete.',
+        (product.name ? `Model extraction for ${product.name}` : 'AI analysis complete.'),
 
       specifications:
-        parseSpecs(extraction.technical_datasheet ?? {}),
+        parseSpecs(data.detection?.specifications ?? technical),
     },
 
     ocr: {
       texts:
+        data.ocr?.texts ??
         extraction.ocr_texts ??
         extraction.text_items ??
-        [],
+        (technical.raw_text ? technical.raw_text.split(/\s+/).filter(Boolean) : []),
     },
 
     pricing: {
       priceMin:
-        pricing.min_price ??
-        pricing.price_min ??
-        0,
+        parsePriceValue(data.pricing?.priceMin) ??
+        parsePriceValue(pricing.min_price) ??
+        parsePriceValue(pricing.price_min) ??
+        parsePriceValue(pricing.summary?.lowest_price) ??
+        (supplierPrices.length ? Math.min(...supplierPrices) : 0),
 
       priceMax:
-        pricing.max_price ??
-        pricing.price_max ??
-        0,
+        parsePriceValue(data.pricing?.priceMax) ??
+        parsePriceValue(pricing.max_price) ??
+        parsePriceValue(pricing.price_max) ??
+        parsePriceValue(pricing.summary?.highest_price) ??
+        (supplierPrices.length ? Math.max(...supplierPrices) : 0),
 
       perUnit:
-        pricing.per_unit ??
-        pricing.price ??
-        0,
+        parsePriceValue(data.pricing?.perUnit) ??
+        parsePriceValue(pricing.per_unit) ??
+        parsePriceValue(pricing.price) ??
+        (supplierPrices.length ? supplierPrices[0] : 0),
 
       trend:
-        pricing.trend ?? 'neutral',
+        data.pricing?.trend ??
+        pricing.trend ??
+        (supplierPrices.length ? 'stable' : 'neutral'),
 
       suppliers:
-        pricing.suppliers ?? [],
+        data.pricing?.suppliers ??
+        pricing.suppliers ??
+        supplierRows.map(row => ({
+          name: row.source ?? 'Unknown source',
+          price: row.price ?? null,
+          unit: row.availability ?? 'N/A',
+          url: row.url ?? '',
+        })),
     },
+    runtime: data.runtime_flags ?? output.runtime_flags ?? extraction.runtime ?? {},
   }
 
 
@@ -240,6 +280,19 @@ export function ResultsPage() {
         </div>
 
         <div className="col-span-3 space-y-4">
+          {(result.runtime.mode || result.runtime.runtime_status) && (
+            <div className="bg-slate-50 border rounded-xl p-3 text-xs text-slate-700">
+              <p>
+                AI runtime: <strong>{result.runtime.mode ?? 'unknown'}</strong> · status:{' '}
+                <strong>{result.runtime.runtime_status ?? 'unknown'}</strong>
+              </p>
+              {result.runtime.runtime_error && (
+                <p className="text-amber-700 mt-1">
+                  Runtime note: {result.runtime.runtime_error}
+                </p>
+              )}
+            </div>
+          )}
           <DetectionCard result={result.detection} />
           <OCRCard texts={result.ocr.texts} />
           <PricingCard pricing={result.pricing} />
