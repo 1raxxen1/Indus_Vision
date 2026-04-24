@@ -1,4 +1,5 @@
-﻿import { useNavigate, useLocation } from 'react-router-dom'
+﻿import { useState } from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { useApi } from '../../hooks/useApi'
 import { scanService } from '../../services/scanService'
 import { LoadingSpinner } from '../../components/ui/LoadingSpinner'
@@ -87,6 +88,7 @@ function parsePriceValue(value) {
 export function ResultsPage() {
   const navigate = useNavigate()
   const location = useLocation()
+  const [saving, setSaving] = useState(false)
 
   const apiResponse = location.state?.apiResponse
   const passedResult = location.state?.result
@@ -219,8 +221,22 @@ export function ResultsPage() {
 
 
   // ── Actions ─────────────────────────
-  function handleSave() {
-    alert('Save to inventory (connect API)')
+  async function handleSave() {
+    if (!result.scanId || saving) return
+    setSaving(true)
+    try {
+      await scanService.saveToInventory({
+        result_id: result.scanId,
+        quantity: 1,
+        notes: 'Saved from scan results',
+      })
+      alert('Saved to inventory')
+    } catch (saveError) {
+      const message = saveError?.response?.data?.error || saveError?.message || 'Unable to save to inventory'
+      alert(message)
+    } finally {
+      setSaving(false)
+    }
   }
 
   function handleDownload() {

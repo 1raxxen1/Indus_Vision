@@ -1,5 +1,6 @@
 import base64
 import json
+from decimal import Decimal, InvalidOperation
 
 from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
@@ -44,7 +45,8 @@ def _serialize_result(result: Result) -> dict:
 
     image_url = result.upload.image.url if result.upload and result.upload.image else None
     detection_name = extracted_product.get("name") or result.upload.source_name or "Detected component"
-    confidence = int(float(result.confidence_score or 0))
+    raw_confidence = result.confidence_score or model_output.get("confidence") or 0
+    confidence = _normalize_confidence_score(raw_confidence)
     raw_text = technical_datasheet.get("raw_text", "")
     ocr_tokens = [token.strip() for token in raw_text.split() if token.strip()]
 
@@ -254,7 +256,7 @@ def results_page(request):
                 "name": product.get("name") or result.upload.source_name or "Unknown",
                 "component_name": product.get("name") or result.upload.source_name or "Unknown",
                 "status": "review" if runtime.get("mode") == "fallback" else "completed",
-                "confidence": int(float(result.confidence_score or 0)),
+                "confidence": _normalize_confidence_score(result.confidence_score),
                 "created_at": result.created_at.isoformat(),
                 "time": result.created_at.strftime("%H:%M"),
                 "date": result.created_at.strftime("%Y-%m-%d"),
@@ -353,8 +355,84 @@ def result_detail_api(request, result_id: int):
     return JsonResponse(_serialize_result(result))
 
 
-@require_GET
+def _normalize_confidence_score(raw_confidence) -> int:
+    confidence_value = float(raw_confidence or 0)
+    if confidence_value <= 1:
+        confidence_value *= 100
+    return max(0, min(100, int(round(confidence_value))))
+
+
+def _extract_unit_price(price_payload: dict) -> Decimal | None:
+    candidates = [
+        price_payload.get("summary", {}).get("lowest_price"),
+        price_payload.get("summary", {}).get("highest_price"),
+    ]
+    for row in price_payload.get("prices", []):
+        candidates.append(row.get("price"))
+
+    for value in candidates:
+        if value in (None, "", "N/A"):
+            continue
+        try:
+            return Decimal(str(value))
+        except (InvalidOperation, ValueError):
+            continue
+    return None
+
+
+@csrf_exempt
+@require_http_methods(["GET", "POST"])
 def scan_inventory_page(request):
+    if request.method == "POST":
+        try:
+            payload = json.loads(request.body or "{}")
+        except json.JSONDecodeError:
+            return JsonResponse({"status": "invalid_request", "error": "Invalid JSON payload."}, status=400)
+
+        result_id = payload.get("result_id") or payload.get("scan_id")
+        if not result_id:
+            return JsonResponse(
+                {"status": "invalid_request", "error": "Provide result_id (or scan_id)."},
+                status=400,
+            )
+
+        try:
+            result = Result.objects.select_related("upload").get(id=result_id)
+        except Result.DoesNotExist:
+            return JsonResponse({"status": "not_found", "error": "Result not found."}, status=404)
+
+        product = (result.model_output or {}).get("product", {})
+        item_name = payload.get("item_name") or product.get("name") or result.upload.source_name or "Unknown item"
+        sku = payload.get("sku") or product.get("model_number", "")
+        quantity = payload.get("quantity") or 1
+        notes = payload.get("notes", "")
+        unit_price = _extract_unit_price(result.price_details or {})
+        upload_user = _resolve_upload_user(request)
+
+        scan = InventoryScan.objects.create(
+            upload=result.upload,
+            scanned_by=upload_user,
+            item_name=item_name,
+            sku=sku,
+            quantity=max(1, int(quantity)),
+            unit_price=unit_price,
+            notes=notes,
+        )
+        return JsonResponse(
+            {
+                "status": "saved",
+                "inventory_item": {
+                    "id": scan.id,
+                    "name": scan.item_name,
+                    "part_number": scan.sku,
+                    "quantity": scan.quantity,
+                    "unit_price": float(scan.unit_price) if scan.unit_price is not None else None,
+                    "last_scan": scan.created_at.isoformat(),
+                },
+            },
+            status=201,
+        )
+
     try:
         scans = list(InventoryScan.objects.select_related("upload").order_by("-created_at")[:200])
     except (OperationalError, ProgrammingError):
