@@ -13,9 +13,12 @@ Base URL prefix for core app routes: `/posts/api/`
 - `GET /posts/api/analytics/` — Analytics snapshot summary.
 - `GET /posts/api/settings/` — User/admin settings summary.
 - `GET /posts/api/admin/` — Admin settings summary.
-- `POST /posts/api/process-image/` — Persists uploaded image to DB/storage, runs skeleton image-to-price pipeline, and stores a `Result` record.
+- `POST /posts/api/process-image/` — Persists uploaded image to DB/storage, runs image extraction plus Hugging Face hosted image detection, performs pricing lookup, and stores a `Result` record.
   - Required form-data: `image` (file).
   - Optional form-data: `image_name` (falls back to uploaded filename when omitted).
+  - Alternative JSON payload: `image_base64` or `images_base64`.
+  - Response includes `output.huggingface_detection`, `output.huggingface_image_text`, `output.paddle_ocr`, `runtime_flags.huggingface_detection_status`, `runtime_flags.huggingface_image_text_status`, and `runtime_flags.paddle_ocr_status`.
+  - Multiple-image uploads are compiled into `compiled_output` and `compiled_display`, merging OCR text, captions, detections, motor specs, and one combined pricing lookup.
 
 ## Non-API site routes (useful for frontend navigation)
 - `GET /` — Homepage.

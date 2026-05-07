@@ -29,6 +29,12 @@ except Exception:  # pragma: no cover - optional runtime dependency
 @dataclass
 class ExtractorRuntimeConfig:
     model_id: str = os.getenv("VISION_MODEL_ID", "unsloth/Llama-3.2-11B-Vision-Instruct-bnb-4bit")
+    enable_local_model: bool = os.getenv("VISION_ENABLE_LOCAL_MODEL", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     adapter_path: str | None = os.getenv("VISION_ADAPTER_PATH")
     backup_model_id: str | None = os.getenv("VISION_BACKUP_MODEL_ID")
     enable_backup_model: bool = os.getenv("VISION_ENABLE_BACKUP_MODEL", "true").strip().lower() in {
@@ -81,6 +87,9 @@ class LlamaExtractorService:
         image_path: str | None,
         source_type: str,
     ) -> dict[str, Any] | None:
+        if source_type == "primary" and not self.config.enable_local_model:
+            self._runtime_status = "local_model_disabled"
+            return None
         if not image_path:
             self._runtime_status = "image_not_provided"
             return None
@@ -166,6 +175,7 @@ class LlamaExtractorService:
                 model_source,
                 torch_dtype=torch.float16 if torch is not None else None,
                 device_map="auto",
+                low_cpu_mem_usage=True,
             )
             self._runtime_status = "backup_loaded"
             self._runtime_error = ""
@@ -179,6 +189,7 @@ class LlamaExtractorService:
             model_source,
             torch_dtype=torch.float16 if torch is not None else None,
             device_map="auto",
+            low_cpu_mem_usage=True,
         )
         self._runtime_status = "loaded"
         self._runtime_error = ""
@@ -232,6 +243,7 @@ class LlamaExtractorService:
             "model_source": model_source,
             "requested_device": self.config.device,
             "used_device": device_used,
+            "local_model_enabled": self.config.enable_local_model,
             "backup_enabled": self.config.enable_backup_model,
             "backup_model_source": self.config.backup_model_id,
         }

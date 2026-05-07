@@ -12,8 +12,29 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 import os
 from pathlib import Path
 
+
+def _load_local_env_file(env_path: Path) -> None:
+    """Load simple KEY=VALUE pairs from a local .env file without extra deps."""
+    if not env_path.exists():
+        return
+
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key:
+            os.environ.setdefault(key, value)
+
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Load local environment variables before service configs read os.getenv(...).
+_load_local_env_file(BASE_DIR.parent / ".env")
+_load_local_env_file(BASE_DIR / ".env")
 
 
 # Quick-start development settings - unsuitable for production

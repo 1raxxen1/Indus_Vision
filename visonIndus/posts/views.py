@@ -48,7 +48,8 @@ def _serialize_result(result: Result) -> dict:
     raw_confidence = result.confidence_score or model_output.get("confidence") or 0
     confidence = _normalize_confidence_score(raw_confidence)
     raw_text = technical_datasheet.get("raw_text", "")
-    ocr_tokens = [token.strip() for token in raw_text.split() if token.strip()]
+    persisted_ocr_texts = model_output.get("ocr_texts") or []
+    ocr_tokens = persisted_ocr_texts or [token.strip() for token in raw_text.split() if token.strip()]
 
     normalized_suppliers = [
         {
@@ -103,6 +104,54 @@ def _serialize_result(result: Result) -> dict:
             "price_details": pricing_payload,
         },
         "runtime_flags": model_output.get("runtime", {}),
+    }
+
+
+def _serialize_pipeline_output(output: dict) -> dict:
+    extraction = output.get("extraction", {})
+    technical_datasheet = extraction.get("technical_datasheet", {})
+    pricing_payload = output.get("pricing", {})
+    product = extraction.get("product", {})
+    pricing_rows = pricing_payload.get("prices", [])
+    raw_text = technical_datasheet.get("raw_text", "")
+    ocr_tokens = extraction.get("ocr_texts") or [token.strip() for token in raw_text.split() if token.strip()]
+    numeric_prices = [
+        float(row.get("price"))
+        for row in pricing_rows
+        if row.get("price") is not None and str(row.get("price")).replace(".", "", 1).isdigit()
+    ]
+    return {
+        "detection": {
+            "name": product.get("name") or "Detected component",
+            "category": "Industrial Component",
+            "confidence": _normalize_confidence_score(extraction.get("confidence") or 0),
+            "description": "Compiled multi-image extraction",
+            "specifications": [
+                {"key": "Model number", "value": product.get("model_number", "Unknown")},
+                {"key": "Manufacturer", "value": product.get("manufacturer", "Unknown")},
+                {"key": "Voltage", "value": technical_datasheet.get("voltage", "Unknown")},
+                {"key": "Power", "value": technical_datasheet.get("power", "Unknown")},
+                {"key": "Dimensions", "value": technical_datasheet.get("dimensions", "Unknown")},
+            ],
+            "motor_specs": extraction.get("motor_specs", {}),
+        },
+        "ocr": {"texts": ocr_tokens},
+        "pricing": {
+            "priceMin": min(numeric_prices) if numeric_prices else None,
+            "priceMax": max(numeric_prices) if numeric_prices else None,
+            "perUnit": numeric_prices[0] if numeric_prices else None,
+            "trend": "stable",
+            "suppliers": [
+                {
+                    "name": row.get("source", "Unknown source"),
+                    "price": row.get("price"),
+                    "unit": row.get("availability", "N/A"),
+                    "url": row.get("url", ""),
+                }
+                for row in pricing_rows
+            ],
+        },
+        "runtime_flags": output.get("runtime_flags", {}),
     }
 
 
@@ -558,6 +607,8 @@ def process_image_api(request):
     processed_results: list[dict] = []
     failed_uploads: list[dict] = []
 
+    compile_multi_image = len(upload_files) > 1
+
     for upload_file in upload_files:
         image_name = request.POST.get("image_name") or upload_file.name
         with transaction.atomic():
@@ -572,6 +623,7 @@ def process_image_api(request):
                 output = PIPELINE.run(
                     image_name=upload_record.image.name,
                     image_path=upload_record.image.path if upload_record.image else None,
+                    include_pricing=not compile_multi_image,
                 )
                 extraction = output.get("extraction", {})
                 confidence = extraction.get("confidence") or 0
@@ -627,14 +679,21 @@ def process_image_api(request):
     )
     response_status = 200 if processed_results else 500
 
+    compiled_output = PIPELINE.compile_outputs(processed_results) if len(processed_results) > 1 else None
+
     response_payload = {
-        "message": "Images processed through upload -> extraction -> selenium pricing -> storage pipeline",
+        "message": "Images processed through upload -> extraction -> vision/OCR compilation -> pricing -> storage pipeline",
         "status": status,
         "processed_count": len(processed_results),
         "failed_count": len(failed_uploads),
+        "is_multi_image_compilation": bool(compiled_output),
         "results": processed_results,
         "failures": failed_uploads,
     }
+    if compiled_output:
+        response_payload["compiled_output"] = compiled_output
+        response_payload["compiled_display"] = _serialize_pipeline_output(compiled_output)
+        response_payload["runtime_flags"] = compiled_output.get("runtime_flags", {})
     if len(processed_results) == 1:
         response_payload.update(processed_results[0])
 

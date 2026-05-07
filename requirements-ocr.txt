@@ -1,0 +1,4 @@
+# Optional OCR dependencies.
+# Use Python 3.10-3.12 for the best PaddlePaddle wheel availability.
+paddleocr==3.5.0
+paddlepaddle

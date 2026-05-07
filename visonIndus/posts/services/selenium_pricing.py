@@ -65,6 +65,12 @@ class SeleniumPricingService:
     PRICE_PATTERN = re.compile(r"(?:₹|INR|Rs\.?)\s*([\d,]+(?:\.\d{1,2})?)", re.IGNORECASE)
 
     def __init__(self, timeout_seconds: int = 8, fail_fast_on_driver_errors: bool | None = None) -> None:
+        self.enabled = os.getenv("SELENIUM_PRICING_ENABLED", "true").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
         self.timeout_seconds = int(os.getenv("SELENIUM_TIMEOUT_SECONDS", str(timeout_seconds)))
         if fail_fast_on_driver_errors is None:
             env_value = os.getenv("SELENIUM_FAIL_FAST", "true").strip().lower()
@@ -75,6 +81,22 @@ class SeleniumPricingService:
     def lookup_prices(self, extracted_payload: dict[str, Any]) -> dict[str, Any]:
         product = extracted_payload.get("product", {})
         query = self._build_query(product)
+
+        if not self.enabled:
+            return {
+                "query": {
+                    "product_name": product.get("name", "Unknown product"),
+                    "model_number": product.get("model_number", ""),
+                    "query_text": query,
+                },
+                "prices": [],
+                "summary": {
+                    "lowest_price": None,
+                    "highest_price": None,
+                    "sources_checked": 0,
+                },
+                "status": "disabled",
+            }
 
         if not SELENIUM_AVAILABLE:
             return self._driver_failure_response(
