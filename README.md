@@ -6,10 +6,13 @@ Industrial hardware visual detection system with real-time pricing lookup.
 
 `/posts/api/process-image/` now executes this chain:
 1. **Upload** image(s) via multipart form-data (`image`/`images`) or JSON base64 payload.
-2. **Extraction** using `LlamaExtractorService` (tries Llama 3.2 Vision runtime first, then safe fallback).
-3. **Selenium pricing lookup** across marketplace sources.
-4. **Presentation payload** normalized for frontend cards (detection/OCR/pricing/storage).
-5. **Storage** in `Upload` and `Result` tables.
+2. **Extraction** using `LlamaExtractorService` (local Llama Vision is disabled by default to avoid a large first-run download, then safe fallback).
+3. **Hosted image detection** using the Hugging Face Inference API (`HuggingFaceDetectionService`) as an additional detection signal.
+4. **Image-to-text captioning** using `HuggingFaceImageTextService` with hosted API by default and optional local CUDA BLIP inference for small GPUs.
+5. **PaddleOCR** text extraction when optional Paddle dependencies are installed.
+6. **Selenium pricing lookup** across marketplace sources.
+7. **Presentation payload** normalized for frontend cards (detection/OCR/pricing/storage).
+8. **Storage** in `Upload` and `Result` tables.
 
 ## API quick test
 
@@ -21,12 +24,139 @@ curl -X POST http://127.0.0.1:8000/posts/api/process-image/ \
 ## Runtime model wiring
 
 Environment variables:
+- `VISION_ENABLE_LOCAL_MODEL` (default `false`; set to `true` only when you want to download/run the large local Llama Vision model)
 - `VISION_MODEL_ID` (default: `unsloth/Llama-3.2-11B-Vision-Instruct-bnb-4bit`)
 - `VISION_ADAPTER_PATH` (optional local fine-tuned adapter/model path)
 - `VISION_DEVICE` (`cuda` or `cpu`)
 - `VISION_MAX_NEW_TOKENS` (default `256`)
+- `HF_ENABLE_IMAGE_DETECTION` (default `true`)
+- `HF_API_TOKEN` or `HUGGINGFACE_API_TOKEN` (required for the public Hugging Face Inference API; optional when `HF_IMAGE_DETECTION_URL` points to an endpoint that does not require bearer auth)
+- `HF_IMAGE_DETECTION_MODEL` (default: `facebook/detr-resnet-50`)
+- `HF_IMAGE_DETECTION_URL` (optional fully-qualified custom Inference Endpoint URL)
+- `HF_IMAGE_DETECTION_TIMEOUT` (default `30` seconds)
+- `HF_ENABLE_IMAGE_TEXT` (default `true`)
+- `HF_IMAGE_TEXT_MODEL` (default: `Salesforce/blip-image-captioning-base`, recommended free image-to-text model for this app)
+- `HF_IMAGE_TEXT_URL` (optional fully-qualified custom Inference Endpoint URL)
+- `HF_IMAGE_TEXT_TIMEOUT` (default `30` seconds)
+- `HF_ENABLE_LOCAL_IMAGE_TEXT` (default `false`; set to `true` to run BLIP locally)
+- `HF_IMAGE_TEXT_PREFER_LOCAL` (default `false`; set to `true` to use the downloaded local BLIP model before the hosted API)
+- `HF_IMAGE_TEXT_DEVICE` (`cuda` or `cpu`; defaults to `cuda`)
+- `HF_IMAGE_TEXT_MAX_NEW_TOKENS` (default `64`)
+- `PADDLE_OCR_ENABLED` (default `true`; returns `dependency_missing` until optional OCR dependencies are installed)
+- `PADDLE_OCR_LANG` (default `en`)
+- `PADDLE_OCR_USE_GPU` (default `false`; start with CPU OCR on 6 GB GPUs to save VRAM)
+- `PADDLE_OCR_MAX_SIDE_LEN` (default `1280`; downscales large images before OCR to reduce RAM)
+- `PADDLE_OCR_DET_LIMIT_SIDE_LEN` (default `960`)
+- `PADDLE_OCR_MIN_CONFIDENCE` (default `0.35`)
+- `SELENIUM_PRICING_ENABLED` (default `true`; set `false` to avoid Chrome/Selenium memory use during local AI testing)
 
-If model dependencies are not available, extractor returns deterministic fallback JSON so the full pipeline remains testable.
+If model dependencies are not available, extractor returns deterministic fallback JSON so the full pipeline remains testable. If Hugging Face detection/captioning is disabled or unavailable, the pipeline still completes with runtime statuses in the response.
+
+### Hugging Face token setup
+
+Keep your Hugging Face token local. Do **not** paste it into source files or commit it. Copy `.env.example` to `.env`, put your token in `HF_API_TOKEN`, and Django will load it automatically from either the repository root or `visonIndus/.env`:
+
+```powershell
+Copy-Item .env.example .env
+notepad .env
+```
+
+If a token has been shared in chat, rotate/revoke it in Hugging Face settings and use a new one locally.
+
+### RTX 3050/3060 6 GB Mobile setup
+
+For your RTX 3050/3060 6 GB Mobile, use the hosted Hugging Face APIs or the local BLIP image-to-text model. Do **not** enable the default 11B Llama Vision model on 6 GB VRAM unless you replace it with a much smaller/quantized model.
+
+Recommended local CUDA captioning setup:
+
+```bash
+export HF_API_TOKEN="your_huggingface_token"
+export HF_IMAGE_TEXT_MODEL="Salesforce/blip-image-captioning-base"
+export HF_ENABLE_LOCAL_IMAGE_TEXT=true
+export HF_IMAGE_TEXT_PREFER_LOCAL=true
+export HF_IMAGE_TEXT_DEVICE=cuda
+export VISION_ENABLE_LOCAL_MODEL=false
+export PADDLE_OCR_USE_GPU=false
+export SELENIUM_PRICING_ENABLED=false  # optional while testing AI locally
+```
+
+`Salesforce/blip-image-captioning-base` is the recommended free Hugging Face image-to-text model here because it is popular, much smaller than BLIP-2/Llama Vision models, and practical for a 6 GB GPU with fp16 inference. Hosted usage still depends on Hugging Face account/API limits.
+
+### Multi-image compilation
+
+You can upload multiple images in one request using the `images` form-data field or `images_base64` JSON array. The backend processes each image, then returns a `compiled_output` that merges all available signals into one product/specification payload and runs pricing once on the compiled data. This is useful for industrial parts where one photo shows the object and another close-up shows the nameplate/spec label.
+
+Example:
+
+```bash
+curl -X POST http://127.0.0.1:8000/posts/api/process-image/ \
+  -F "images=@motor-front.jpg" \
+  -F "images=@motor-nameplate.jpg"
+```
+
+The compiled response includes:
+- `compiled_output.extraction.product`
+- `compiled_output.extraction.ocr_texts`
+- `compiled_output.extraction.motor_specs` (for values such as HP, voltage, RPM, phase, frequency, current, IP rating when visible in OCR/captions)
+- `compiled_output.pricing`
+- `compiled_display` for frontend cards
+
+### PaddleOCR setup
+
+PaddleOCR is optional because PaddlePaddle wheels are more version-sensitive than the rest of the stack. Install it separately from `requirements-ocr.txt` after the main app is working:
+
+```bash
+pip install -r requirements-ocr.txt
+```
+
+For your current Python `3.14.4`, `paddleocr` is visible on PyPI but `paddlepaddle` may not have a matching wheel yet. If `pip install paddlepaddle` reports no matching distribution, create a Python 3.11 or 3.12 virtual environment for OCR/GPU work. Start with CPU OCR to keep VRAM free for BLIP:
+
+```bash
+export PADDLE_OCR_ENABLED=true
+export PADDLE_OCR_USE_GPU=false
+export PADDLE_OCR_LANG=en
+```
+
+On Windows PowerShell, use `$env:NAME="value"` instead of `export NAME=value`.
+
+Check your PC readiness at any time with:
+
+```bash
+cd visonIndus
+python manage.py check_pc_readiness
+```
+
+### Training image-to-text on your dataset
+
+Create a JSONL file where each line has an image path and target caption/text:
+
+```jsonl
+{"image": "relay/relay_001.jpg", "text": "industrial relay module with screw terminals"}
+{"image": "motors/motor_001.jpg", "text": "small 24 volt DC motor with gearbox"}
+```
+
+Fine-tune BLIP with 6 GB-friendly defaults (batch size 1, fp16 on CUDA, frozen vision encoder):
+
+```bash
+cd visonIndus
+python manage.py train_image_text_model \
+  --dataset ../data/industrial_captions.jsonl \
+  --image-root ../data/images \
+  --output-dir ../trained_models/blip-industrial \
+  --epochs 1 \
+  --batch-size 1 \
+  --gradient-accumulation-steps 8 \
+  --device cuda
+```
+
+Then run the trained model locally:
+
+```bash
+export HF_IMAGE_TEXT_MODEL="../trained_models/blip-industrial"
+export HF_ENABLE_LOCAL_IMAGE_TEXT=true
+export HF_IMAGE_TEXT_PREFER_LOCAL=true
+export HF_IMAGE_TEXT_DEVICE=cuda
+```
 
 
 ## Will frontend work out of the box with Nginx?
