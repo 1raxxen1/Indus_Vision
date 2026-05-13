@@ -8,4 +8,7 @@ export default defineConfig({
     react(), 
     tailwindcss()
   ],
+  server: {
+    allowedHosts: ['sharper-aneurism-partake.ngrok-free.dev', 'localhost', '127.0.0.1', 'visonindus-frontend.loca.lt']
+  }
 })

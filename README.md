@@ -35,13 +35,17 @@ Environment variables:
 - `HF_IMAGE_DETECTION_URL` (optional fully-qualified custom Inference Endpoint URL)
 - `HF_IMAGE_DETECTION_TIMEOUT` (default `30` seconds)
 - `HF_ENABLE_IMAGE_TEXT` (default `true`)
-- `HF_IMAGE_TEXT_MODEL` (default: `Salesforce/blip-image-captioning-base`, recommended free image-to-text model for this app)
+- `HF_IMAGE_TEXT_MODEL` (default: `nlpconnect/vit-gpt2-image-captioning`; recommended free local image-to-text model for this app)
 - `HF_IMAGE_TEXT_URL` (optional fully-qualified custom Inference Endpoint URL)
 - `HF_IMAGE_TEXT_TIMEOUT` (default `30` seconds)
-- `HF_ENABLE_LOCAL_IMAGE_TEXT` (default `false`; set to `true` to run BLIP locally)
-- `HF_IMAGE_TEXT_PREFER_LOCAL` (default `false`; set to `true` to use the downloaded local BLIP model before the hosted API)
+- `HF_ENABLE_LOCAL_IMAGE_TEXT` (default `false`; set to `true` to run local image captioning)
+- `HF_IMAGE_TEXT_PREFER_LOCAL` (default `false`; set to `true` to use the downloaded local caption model before the hosted API)
 - `HF_IMAGE_TEXT_DEVICE` (`cuda` or `cpu`; defaults to `cuda`)
 - `HF_IMAGE_TEXT_MAX_NEW_TOKENS` (default `64`)
+- `HF_ENABLE_VISION_LABELS` (default `true`; enables a second local vision model for image classification labels)
+- `HF_VISION_LABELS_MODEL` (default: `google/vit-base-patch16-224`)
+- `HF_VISION_LABELS_DEVICE` (`cuda` or `cpu`; defaults to `cuda`)
+- `HF_VISION_LABELS_TOP_K` (default `5`)
 - `PADDLE_OCR_ENABLED` (default `true`; returns `dependency_missing` until optional OCR dependencies are installed)
 - `PADDLE_OCR_LANG` (default `en`)
 - `PADDLE_OCR_USE_GPU` (default `false`; start with CPU OCR on 6 GB GPUs to save VRAM)
@@ -71,13 +75,16 @@ Recommended local CUDA captioning setup:
 
 ```bash
 export HF_API_TOKEN="your_huggingface_token"
-export HF_IMAGE_TEXT_MODEL="Salesforce/blip-image-captioning-base"
+export HF_IMAGE_TEXT_MODEL="nlpconnect/vit-gpt2-image-captioning"
 export HF_ENABLE_LOCAL_IMAGE_TEXT=true
 export HF_IMAGE_TEXT_PREFER_LOCAL=true
 export HF_IMAGE_TEXT_DEVICE=cuda
+export HF_ENABLE_VISION_LABELS=true
+export HF_VISION_LABELS_MODEL="google/vit-base-patch16-224"
+export HF_VISION_LABELS_DEVICE=cuda
 export VISION_ENABLE_LOCAL_MODEL=false
 export PADDLE_OCR_USE_GPU=false
-export SELENIUM_PRICING_ENABLED=false  # optional while testing AI locally
+export SELENIUM_PRICING_ENABLED=true
 ```
 
 `Salesforce/blip-image-captioning-base` is the recommended free Hugging Face image-to-text model here because it is popular, much smaller than BLIP-2/Llama Vision models, and practical for a 6 GB GPU with fp16 inference. Hosted usage still depends on Hugging Face account/API limits.

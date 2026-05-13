@@ -1,5 +1,5 @@
-import { useState, useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useMemo, useEffect } from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { useApi } from '../../hooks/useApi'
 import { inventoryService } from '../../services/inventoryService'
 import { LoadingSpinner } from '../../components/ui/LoadingSpinner'
@@ -11,7 +11,7 @@ import { StatsCard } from '../../components/charts/StatsCard'
 
 import {
   Package, IndianRupee,
-  AlertTriangle, Download, Plus,
+  AlertTriangle, Download, Plus, RefreshCw,
 } from 'lucide-react'
 
 
@@ -48,22 +48,24 @@ function exportCSV(items) {
 
 export function InventoryListPage() {
   const navigate = useNavigate()
+  const location = useLocation()
 
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('All')
   const [status, setStatus] = useState('All')
 
   // ── API ────────────────────────────
-  const { data = {}, loading, error, refetch } = useApi(
+  const { data, loading, refreshing, error, refetch } = useApi(
     () => inventoryService.getScanInventory()
   )
 
-  if (loading) return <LoadingSpinner message="Loading inventory..." />
-  if (error) return <ErrorState message={error} onRetry={refetch} />
+  // ── Auto-refetch when navigating back to this page ────────────
+  useEffect(() => {
+    refetch()
+  }, [location.pathname, refetch])
 
-
-  // ── Handle BOTH API cases ───────────
-  const hasItems = Array.isArray(data.items) && data.items.length > 0
+  // ── Compute data always (for consistent hook order) ──────────
+  const hasItems = Array.isArray(data?.items) && data.items.length > 0
 
   const allItems = hasItems
     ? data.items.map(item => ({
@@ -81,27 +83,25 @@ export function InventoryListPage() {
       }))
     : []
 
-
   // ── Stats ───────────────────────────
   const stats = useMemo(() => ({
     total:
-      data.total_items ??
-      data.inventory_scans ??
+      data?.total_items ??
+      data?.inventory_scans ??
       allItems.length,
 
     totalValue:
-      data.total_value ??
+      data?.total_value ??
       allItems.reduce((s, i) => s + i.totalValue, 0),
 
     lowStock:
-      data.low_stock ??
+      data?.low_stock ??
       allItems.filter(i => i.status === 'Low stock').length,
 
     outOfStock:
-      data.out_of_stock ??
+      data?.out_of_stock ??
       allItems.filter(i => i.status === 'Out of stock').length,
   }), [data, allItems])
-
 
   // ── Filtering ───────────────────────
   const filtered = useMemo(() => {
@@ -120,12 +120,16 @@ export function InventoryListPage() {
     })
   }, [search, category, status, allItems])
 
+  const isInitialLoading = loading && !data
+  if (isInitialLoading) return <LoadingSpinner message="Loading inventory..." />
+  if (error) return <ErrorState message={error} onRetry={refetch} />
+
 
   return (
     <div className="max-w-7xl mx-auto space-y-5">
 
       {/* Header */}
-      <div className="flex justify-between">
+      <div className="flex justify-between items-center">
         <div>
           <h1 className="text-2xl font-bold">Inventory</h1>
           <p className="text-sm text-gray-500">
@@ -134,6 +138,15 @@ export function InventoryListPage() {
         </div>
 
         <div className="flex gap-2">
+          <button 
+            onClick={() => refetch()}
+            disabled={refreshing}
+            className="disabled:opacity-50"
+            title="Refresh inventory"
+          >
+            <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} /> Refresh
+          </button>
+
           <button onClick={() => exportCSV(filtered)}>
             <Download size={14} /> Export
           </button>
@@ -169,9 +182,11 @@ export function InventoryListPage() {
       {hasItems ? (
         <DataTable items={filtered} />
       ) : (
-        <div className="bg-white border rounded-xl p-10 text-center text-gray-400">
-          Inventory items API not available yet.<br />
-          Showing summary only.
+        <div className="bg-white border rounded-xl p-10 text-center text-gray-500">
+          <p className="text-lg font-semibold text-gray-900">No inventory items yet.</p>
+          <p className="text-sm text-gray-500 mt-2">
+            Save a scanned result or upload a component to start tracking inventory.
+          </p>
         </div>
       )}
 

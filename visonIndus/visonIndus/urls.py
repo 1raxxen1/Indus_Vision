@@ -18,4 +18,6 @@ urlpatterns = [
     path('inventory/', include('inventory_app.urls')),
     path('analytics/', include('analytics_app.urls')),
     path('app-settings/', include('app_settings.urls')),
+    # Catch-all for SPA
+    path('<path:path>', views.spa_view),
 ]

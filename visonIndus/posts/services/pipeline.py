@@ -5,6 +5,8 @@ from typing import Any
 
 from .huggingface_detection import HuggingFaceDetectionService
 from .huggingface_image_text import HuggingFaceImageTextService
+from .huggingface_vision_labels import HuggingFaceVisionLabelsService
+from .huggingface_ocr import HuggingFaceOCRService
 from .llama_extractor import LlamaExtractorService
 from .paddle_ocr import PaddleOCRService
 from .selenium_pricing import SeleniumPricingService
@@ -34,12 +36,16 @@ class ImageToPricePipeline:
         pricing: SeleniumPricingService | None = None,
         hf_detector: HuggingFaceDetectionService | None = None,
         hf_image_text: HuggingFaceImageTextService | None = None,
+        hf_vision_labels: HuggingFaceVisionLabelsService | None = None,
+        hf_ocr: HuggingFaceOCRService | None = None,
         ocr: PaddleOCRService | None = None,
     ) -> None:
         self.extractor = extractor or LlamaExtractorService()
         self.pricing = pricing or SeleniumPricingService()
         self.hf_detector = hf_detector or HuggingFaceDetectionService()
         self.hf_image_text = hf_image_text or HuggingFaceImageTextService()
+        self.hf_vision_labels = hf_vision_labels or HuggingFaceVisionLabelsService()
+        self.hf_ocr = hf_ocr or HuggingFaceOCRService()
         self.ocr = ocr or PaddleOCRService()
 
     def run(
@@ -51,12 +57,17 @@ class ImageToPricePipeline:
         extraction = self.extractor.extract_structured_data(image_name=image_name, image_path=image_path)
         huggingface_detection = self.hf_detector.detect(image_path=image_path, image_name=image_name)
         huggingface_image_text = self.hf_image_text.generate(image_path=image_path, image_name=image_name)
+        huggingface_vision_labels = self.hf_vision_labels.classify(image_path=image_path, image_name=image_name)
+        huggingface_ocr = self.hf_ocr.extract_text(image_path=image_path, image_name=image_name)
         paddle_ocr = self.ocr.extract_text(image_path=image_path, image_name=image_name)
+        # Use PaddleOCR if available and successful, otherwise fallback to HF OCR
+        ocr_result = paddle_ocr if paddle_ocr and paddle_ocr.get("status") == "completed" else huggingface_ocr
         self._merge_vision_signals(
             extraction=extraction,
             detection=huggingface_detection,
             image_text=huggingface_image_text,
-            ocr=paddle_ocr,
+            vision_labels=huggingface_vision_labels,
+            ocr=ocr_result,
         )
         pricing = self.pricing.lookup_prices(extracted_payload=extraction) if include_pricing else self._pricing_skipped()
         runtime = extraction.get("runtime", {})
@@ -65,6 +76,8 @@ class ImageToPricePipeline:
             "extraction": extraction,
             "huggingface_detection": huggingface_detection,
             "huggingface_image_text": huggingface_image_text,
+            "huggingface_vision_labels": huggingface_vision_labels,
+            "huggingface_ocr": huggingface_ocr,
             "paddle_ocr": paddle_ocr,
             "pricing": pricing,
             "runtime_flags": {
@@ -77,8 +90,14 @@ class ImageToPricePipeline:
                 "huggingface_image_text_status": huggingface_image_text.get("status", "unknown"),
                 "huggingface_image_text_model": huggingface_image_text.get("model", "unknown"),
                 "huggingface_caption": huggingface_image_text.get("caption", ""),
-                "paddle_ocr_status": paddle_ocr.get("status", "unknown"),
-                "paddle_ocr_text_count": len(paddle_ocr.get("texts", [])),
+                "huggingface_vision_labels_status": huggingface_vision_labels.get("status", "unknown"),
+                "huggingface_vision_labels_model": huggingface_vision_labels.get("model", "unknown"),
+                "huggingface_top_labels": [label.get("label") for label in huggingface_vision_labels.get("top_labels", [])],
+                "huggingface_ocr_status": huggingface_ocr.get("status", "unknown"),
+                "huggingface_ocr_model": huggingface_ocr.get("model", "unknown"),
+                "huggingface_ocr_text_count": len(huggingface_ocr.get("texts", [])),
+                "paddle_ocr_status": paddle_ocr.get("status", "unknown") if paddle_ocr else "not_used",
+                "paddle_ocr_text_count": len(paddle_ocr.get("texts", [])) if paddle_ocr else 0,
                 "dependencies": {
                     "transformers_available": runtime.get("transformers_available", False),
                     "pillow_available": runtime.get("pillow_available", False),
@@ -113,10 +132,12 @@ class ImageToPricePipeline:
         extraction: dict[str, Any],
         detection: dict[str, Any],
         image_text: dict[str, Any],
+        vision_labels: dict[str, Any],
         ocr: dict[str, Any],
     ) -> None:
         extraction["huggingface_detection"] = detection
         extraction["huggingface_image_text"] = image_text
+        extraction["huggingface_vision_labels"] = vision_labels
         extraction["paddle_ocr"] = ocr
 
         ocr_texts = [str(text).strip() for text in ocr.get("texts", []) if str(text).strip()]
@@ -127,21 +148,33 @@ class ImageToPricePipeline:
             technical["raw_text"] = f"{raw_text}\nPaddleOCR: {' '.join(ocr_texts)}".strip()
 
         caption = str(image_text.get("caption") or "").strip()
-        if caption:
+        if caption and not self._is_irrelevant_caption(caption):
             technical = extraction.setdefault("technical_datasheet", {})
             raw_text = str(technical.get("raw_text") or "").strip()
             technical["raw_text"] = f"{raw_text}\nHF image caption: {caption}".strip()
 
+        if vision_labels.get("labels"):
+            technical = extraction.setdefault("technical_datasheet", {})
+            raw_text = str(technical.get("raw_text") or "").strip()
+            labels_text = ", ".join(str(label).strip() for label in vision_labels.get("labels", []) if str(label).strip())
+            if labels_text:
+                technical["raw_text"] = f"{raw_text}\nHF vision labels: {labels_text}".strip()
+
         self._merge_motor_specs(extraction)
         top_detection = detection.get("top_detection") or {}
-        if detection.get("status") != "completed" or not top_detection:
-            return
-
         product = extraction.setdefault("product", {})
         current_name = str(product.get("name") or "").strip().lower()
-        if current_name in self.GENERIC_PRODUCT_NAMES:
+
+        # Prefer detection if available, otherwise use vision labels
+        if detection.get("status") == "completed" and top_detection and current_name in self.GENERIC_PRODUCT_NAMES:
             product["name"] = str(top_detection.get("label") or "Detected component").title()
             extraction["confidence"] = top_detection.get("score") or extraction.get("confidence", 0)
+        elif vision_labels.get("status") == "completed" and vision_labels.get("top_labels") and current_name in self.GENERIC_PRODUCT_NAMES:
+            # Use top vision label as fallback, but filter out obviously irrelevant ones
+            top_label = vision_labels["top_labels"][0]["label"] if vision_labels["top_labels"] else None
+            if top_label and not self._is_irrelevant_label(top_label):
+                product["name"] = top_label.title()
+                extraction["confidence"] = vision_labels["top_labels"][0]["score"] if vision_labels["top_labels"] else 0
 
     def _compile_extractions(
         self,
@@ -168,8 +201,12 @@ class ImageToPricePipeline:
             for payload in extractions
             for detection in payload.get("huggingface_detection", {}).get("detections", [])
         )
+        vision_labels = self._unique_texts(
+            payload.get("huggingface_vision_labels", {}).get("labels")
+            for payload in extractions
+        )
         raw_text_parts = self._unique_texts(
-            [*(technical.get("raw_text") for technical in technical_payloads), *ocr_texts, *captions]
+            [*(technical.get("raw_text") for technical in technical_payloads), *ocr_texts, *captions, *vision_labels]
         )
         raw_text = "\n".join(raw_text_parts)
         compiled = {
@@ -184,7 +221,7 @@ class ImageToPricePipeline:
                 for row in processed_results
             ],
             "product": {
-                "name": self._first_specific_product_name(product_payloads, detection_labels, captions),
+                "name": self._first_specific_product_name(product_payloads, detection_labels, vision_labels, captions),
                 "model_number": self._first_populated(product.get("model_number") for product in product_payloads),
                 "manufacturer": self._first_populated(product.get("manufacturer") for product in product_payloads),
             },
@@ -196,6 +233,7 @@ class ImageToPricePipeline:
             },
             "ocr_texts": ocr_texts,
             "captions": captions,
+            "vision_labels": vision_labels,
             "detection_labels": detection_labels,
             "confidence": max([self._normalized_confidence(payload.get("confidence", 0)) for payload in extractions] or [0]),
             "status": "compiled",
@@ -281,6 +319,7 @@ class ImageToPricePipeline:
         self,
         product_payloads: list[dict[str, Any]],
         detection_labels: list[str],
+        vision_labels: list[str],
         captions: list[str],
     ) -> str:
         for product in product_payloads:
@@ -289,6 +328,9 @@ class ImageToPricePipeline:
                 return name
         for label in detection_labels:
             if label.lower() not in self.GENERIC_PRODUCT_NAMES:
+                return label.title()
+        for label in vision_labels:
+            if label.lower() not in self.GENERIC_PRODUCT_NAMES and not self._is_irrelevant_label(label):
                 return label.title()
         for caption in captions:
             if "motor" in caption.lower():
@@ -317,10 +359,19 @@ class ImageToPricePipeline:
             value *= 100
         return max(0.0, min(100.0, value))
 
-    def _normalize_phase(self, value: str) -> str:
-        normalized = value.strip().lower()
-        if normalized in {"1", "single"}:
-            return "1 Phase"
-        if normalized in {"3", "three"}:
-            return "3 Phase"
-        return value
+    def _is_irrelevant_label(self, label: str) -> bool:
+        """Check if a vision label is likely irrelevant for industrial component detection."""
+        irrelevant_keywords = {
+            "revolver", "six-gun", "six-shooter", "hatchet", "oboe", "hautboy", "hautbois",
+            "bassoon", "whistle", "flag", "stripe", "musical instrument", "weapon", "gun"
+        }
+        label_lower = label.lower()
+        return any(keyword in label_lower for keyword in irrelevant_keywords)
+
+    def _is_irrelevant_caption(self, caption: str) -> bool:
+        """Check if a caption is likely hallucinated and irrelevant for industrial components."""
+        irrelevant_keywords = {
+            "flag", "stripe", "musical", "instrument", "weapon", "gun", "hatchet", "revolver"
+        }
+        caption_lower = caption.lower()
+        return any(keyword in caption_lower for keyword in irrelevant_keywords)

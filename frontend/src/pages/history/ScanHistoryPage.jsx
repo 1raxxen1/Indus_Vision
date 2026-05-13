@@ -115,82 +115,132 @@ export function ScanHistoryPage() {
     <div className="max-w-5xl mx-auto space-y-5">
 
       {/* Header */}
-      <div className="flex justify-between">
+      <div className="flex justify-between items-center">
         <div>
           <h1 className="text-2xl font-bold">Scan history</h1>
+          <p className="text-sm text-gray-500">
+            All processed scans
+          </p>
         </div>
 
-        <button onClick={() => navigate('/upload')}>
+        <button 
+          onClick={() => navigate('/upload')}
+          className="flex items-center gap-2 px-4 py-2 bg-orange-600 text-white text-sm font-medium rounded-xl hover:bg-orange-700 transition-colors"
+        >
           <ScanLine size={14} /> New scan
         </button>
       </div>
 
 
       {/* Stats */}
-      <div className="grid grid-cols-4 gap-3">
-        <div>{stats.total} Total</div>
-        <div>{stats.completed} Done</div>
-        <div>{stats.review} Review</div>
-        <div>{stats.failed} Failed</div>
+      <div className="grid grid-cols-4 gap-4">
+        <div className="bg-white border rounded-xl p-4 text-center">
+          <p className="text-2xl font-bold text-navy-800">{stats.total}</p>
+          <p className="text-xs text-gray-500 uppercase tracking-wide">Total</p>
+        </div>
+        <div className="bg-white border rounded-xl p-4 text-center">
+          <p className="text-2xl font-bold text-green-600">{stats.completed}</p>
+          <p className="text-xs text-gray-500 uppercase tracking-wide">Done</p>
+        </div>
+        <div className="bg-white border rounded-xl p-4 text-center">
+          <p className="text-2xl font-bold text-orange-600">{stats.review}</p>
+          <p className="text-xs text-gray-500 uppercase tracking-wide">Review</p>
+        </div>
+        <div className="bg-white border rounded-xl p-4 text-center">
+          <p className="text-2xl font-bold text-red-600">{stats.failed}</p>
+          <p className="text-xs text-gray-500 uppercase tracking-wide">Failed</p>
+        </div>
       </div>
 
 
       {/* Search + Filter */}
       <div className="flex gap-3">
-        <Input
-          icon={Search}
-          placeholder="Search..."
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-        />
+        <div className="flex-1">
+          <Input
+            icon={Search}
+            placeholder="Search scans..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+        </div>
 
-        {FILTERS.map(f => (
-          <button key={f} onClick={() => setFilter(f)}>
-            {f}
-          </button>
-        ))}
+        <div className="flex gap-2">
+          {FILTERS.map(f => (
+            <button 
+              key={f} 
+              onClick={() => setFilter(f)}
+              className={`px-3 py-2 text-sm font-medium rounded-xl transition-colors ${
+                filter === f 
+                  ? 'bg-orange-600 text-white' 
+                  : 'bg-white border text-gray-700 hover:bg-gray-50'
+              }`}
+            >
+              {f}
+            </button>
+          ))}
+        </div>
       </div>
 
 
       {/* List */}
       {Object.keys(grouped).length === 0 ? (
-        <p>No scans found</p>
+        <div className="bg-white border rounded-xl p-10 text-center text-gray-500">
+          <p className="text-lg font-semibold text-gray-900">No scans found</p>
+          <p className="text-sm text-gray-500 mt-2">
+            Upload an image to start scanning components.
+          </p>
+        </div>
       ) : (
-        Object.entries(grouped).map(([date, scans]) => (
-          <div key={date}>
+        <div className="space-y-4">
+          {Object.entries(grouped).map(([date, scans]) => (
+            <div key={date} className="bg-white border rounded-xl overflow-hidden">
+              <div className="px-4 py-3 border-b bg-gray-50">
+                <h3 className="text-sm font-semibold text-gray-700">{date}</h3>
+              </div>
 
-            <h3>{date}</h3>
+              <div className="divide-y divide-gray-100">
+                {scans.map(scan => {
+                  const StatusIcon = STATUS_MAP[scan.status]?.icon ?? Clock
 
-            {scans.map(scan => {
-              const StatusIcon = STATUS_MAP[scan.status]?.icon ?? Clock
+                  return (
+                    <div
+                      key={scan.id}
+                      onClick={() =>
+                        navigate('/results', { state: { scanId: scan.id } })
+                      }
+                      className="flex items-center gap-4 p-4 cursor-pointer hover:bg-orange-50/50 transition-colors group"
+                    >
+                      <div className="flex-shrink-0">
+                        <StatusIcon size={20} className={`${
+                          scan.status === 'completed' ? 'text-green-500' :
+                          scan.status === 'review' ? 'text-orange-500' :
+                          'text-red-500'
+                        }`} />
+                      </div>
 
-              return (
-                <div
-                  key={scan.id}
-                  onClick={() =>
-                    navigate('/results', { state: { scanId: scan.id } })
-                  }
-                  className="flex items-center gap-4 cursor-pointer"
-                >
-                  <StatusIcon />
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-navy-800 truncate group-hover:text-orange-700 transition-colors">
+                          {scan.name}
+                        </p>
+                        <p className="text-xs text-gray-400">{scan.time}</p>
+                      </div>
 
-                  <div>
-                    <p>{scan.name}</p>
-                    <p>{scan.time}</p>
-                  </div>
+                      <div className="flex items-center gap-3">
+                        <ConfidencePill value={scan.confidence} />
 
-                  <ConfidencePill value={scan.confidence} />
+                        <Badge variant={STATUS_MAP[scan.status]?.variant}>
+                          {STATUS_MAP[scan.status]?.label}
+                        </Badge>
 
-                  <Badge variant={STATUS_MAP[scan.status]?.variant}>
-                    {STATUS_MAP[scan.status]?.label}
-                  </Badge>
-
-                  <ArrowRight />
-                </div>
-              )
-            })}
-          </div>
-        ))
+                        <ArrowRight size={16} className="text-gray-300 group-hover:text-orange-400 transition-colors" />
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   )
